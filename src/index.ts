@@ -156,16 +156,43 @@ export function apply(ctx: HostContext): void {
                   }
                   const buttons = [...document.querySelectorAll('button, [role="button"]')]
                     .filter(visible)
-                    .map((el) => (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 30))
-                    .filter(Boolean)
+                    .map((el) => ({
+                      tx: (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 30),
+                      dis: (el as HTMLButtonElement).disabled === true,
+                    }))
+                    .filter((button) => button.tx !== '')
                   const dialogs = [...document.querySelectorAll('[role="dialog"], .semi-modal, .semi-portal')]
                     .filter(visible)
                     .map((el) => (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 300))
                     .filter(Boolean)
+                  const inputs = [...document.querySelectorAll('input, textarea, [contenteditable="true"]')]
+                    .filter(visible)
+                    .map((el) => ({
+                      t: el.tagName,
+                      ty: el.getAttribute('type') ?? '',
+                      ph: el.getAttribute('placeholder') ?? '',
+                      dis: (el as HTMLInputElement).disabled === true,
+                      cls: String(el.className ?? '').slice(0, 60),
+                    }))
+                    .slice(0, 30)
                   const bodyText = document.body.innerText.slice(0, 800)
-                  return { url: location.href, title: document.title, buttons: [...new Set(buttons)].slice(0, 40), dialogs: dialogs.slice(0, 6), bodyText }
+                  return { url: location.href, title: document.title, buttons: [...new Set(buttons.map((b) => JSON.stringify(b)))].map((s) => JSON.parse(s)).slice(0, 40), dialogs: dialogs.slice(0, 6), inputs, bodyText }
                 })
                 return { ok: true, value: { page: state } }
+              }
+              case 'debug.screenshot': {
+                const platform = typeof payload.platform === 'string' ? payload.platform : ''
+                if (platform === '') return { ok: false, error: { code: 'bad-request', message: 'platform 必填', details: { issues: [] } } }
+                const context = await service.browser.contextFor(platform)
+                const page = context.pages()[context.pages().length - 1]
+                if (page === undefined) return { ok: true, value: { path: null, message: '无页面' } }
+                const { mkdirSync } = await import('node:fs')
+                const { join } = await import('node:path')
+                const debugDir = join(baseDir(), 'debug')
+                mkdirSync(debugDir, { recursive: true })
+                const file = join(debugDir, `${platform}-${Date.now()}.png`)
+                await page.screenshot({ path: file, type: 'png', fullPage: false })
+                return { ok: true, value: { path: file } }
               }
               default:
                 return {

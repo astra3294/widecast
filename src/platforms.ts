@@ -93,13 +93,15 @@ export const PLATFORMS: readonly PlatformDef[] = [
     homeUrl: 'https://creator.douyin.com/creator-micro/home',
     publishUrl: 'https://creator.douyin.com/creator-micro/content/upload',
     manageUrl: 'https://creator.douyin.com/creator-micro/content/manage',
-    loggedInUrlPatterns: ['creator.douyin.com/creator-micro'],
+    // 注意:登录页与后台 URL 前缀相同(/creator-micro),URL 判定不可靠,
+    // 只用后台首页精确匹配;反证用"手机号输入框存在=登录页"
+    loggedInUrlPatterns: ['creator.douyin.com/creator-micro/home'],
     loginUrlPatterns: ['creator.douyin.com/root', 'douyin.com/passport'],
     // 蚁小二 waitForLoginFinish 判据:风控 SDK 密钥落进 localStorage 即已登录;
     // 但登录页也会初始化该 SDK → 用"登录表单可见"反证(手机号输入框存在=未登录)
     probe: {
       localStorageKeys: ['s_sdk_crypt_sdk', 's_sdk_sign_data_key', 'web_protect'],
-      blockedBySelectors: ['#normal-input'],
+      blockedBySelectors: ['input[placeholder="请输入手机号"]', '#normal-input'],
     },
     publish: {
       videoInputSelector: '#joyride-wrapper input[type="file"]',

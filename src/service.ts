@@ -43,7 +43,7 @@ function getPath(value: unknown, path: string): unknown {
  * 2) 探针:监听后台首页自然流量,匹配探针接口并检查响应 JSON 路径;另查 localStorage 键;
  * 3) 兜底:首页 URL 判定。
  */
-async function detectLoggedIn(platform: PlatformDef, browser: BrowserManager): Promise<boolean> {
+export async function detectLoggedIn(platform: PlatformDef, browser: BrowserManager): Promise<boolean> {
   const context = await browser.contextFor(platform.id)
 
   for (const candidate of context.pages()) {

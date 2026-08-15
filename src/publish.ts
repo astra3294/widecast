@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { BrowserManager } from './browser.js'
 import { findPlatform } from './platforms.js'
+import { detectLoggedIn } from './service.js'
 import { TaskStore, type PublishInput, type PublishTask } from './tasks.js'
 
 export class PublishService {
@@ -58,6 +59,13 @@ export class PublishService {
         return
       }
       const publishUrl = isImage && platform.publishImageUrl !== undefined ? platform.publishImageUrl : platform.publishUrl!
+
+      // 0) 登录前置检查(明确失败原因,不做无谓等待)
+      this.tasks.update(taskId, { status: 'uploading', step: 'login-check' })
+      if (!(await detectLoggedIn(platform, this.browser))) {
+        this.tasks.update(taskId, { status: 'failed', step: 'not-logged-in', message: `${platform.name} 未登录:请在面板「账号」tab 重新登录后再重试` })
+        return
+      }
 
       this.tasks.update(taskId, { status: 'uploading', step: 'open-page' })
       const page = await this.browser.openPage(task.platform, publishUrl)
