@@ -22,7 +22,7 @@ export const inject = ['connection', 'tools']
 interface RpcResult<T> {
   ok: boolean
   value?: T
-  error?: { code: string; message: string }
+  error?: { code: string; message: string; details?: Record<string, unknown> }
 }
 
 interface ConnectionRpc {
@@ -111,10 +111,13 @@ export function apply(ctx: HostContext): void {
                 return { ok: true, value: service.removeAccount(platform) }
               }
               default:
-                return { ok: false, error: { code: 'unknown-endpoint', message: `unknown widecast endpoint: ${endpoint}` } }
+                return {
+                  ok: false,
+                  error: { code: 'bad-request', message: `unknown widecast endpoint: ${endpoint}`, details: { issues: [] } },
+                }
             }
           } catch (error) {
-            return { ok: false, error: { code: 'widecast-error', message: String(error) } }
+            return { ok: false, error: { code: 'internal', message: String(error), details: {} } }
           }
         },
         { authority: 'loopback' },

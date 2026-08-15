@@ -174,7 +174,15 @@ class WidecastController {
   }
 
   private async call<T>(endpoint: string, payload: unknown): Promise<T> {
-    const result = await this.connection.rpc.call(RPC_CHANNEL, endpoint, payload)
+    let result: RpcResult<T>
+    try {
+      result = await this.connection.rpc.call(RPC_CHANNEL, endpoint, payload) as RpcResult<T>
+    } catch (error) {
+      const raw = String(error)
+      throw new Error(raw.includes('Invalid input')
+        ? `与宿主通信失败(宿主版本可能未更新,请重启 Harness):${endpoint}`
+        : `${endpoint} 通信失败:${raw.slice(0, 300)}`)
+    }
     if (!result.ok) throw new Error(result.error?.message ?? `${endpoint} failed`)
     return result.value as T
   }
