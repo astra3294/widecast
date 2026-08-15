@@ -322,7 +322,7 @@ export class WidecastService {
           let node: Element | null = button
           for (let i = 0; i < 8 && node !== null; i += 1) {
             node = node.parentElement
-            if (node !== null && node.innerText.includes(key)) {
+            if (node !== null && (node as HTMLElement).innerText.includes(key)) {
               ;(button as HTMLButtonElement).click()
               return true
             }
