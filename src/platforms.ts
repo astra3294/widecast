@@ -1,6 +1,7 @@
 /**
- * 平台目录:主流媒体平台的定义(登录页/创作者后台/发布页)。
- * URL 清单源自对蚁小二平台注册表的逆向提取(公开事实),适配器为本项目原创实现。
+ * 平台目录:主流媒体平台的定义(登录页/创作者后台/发布页 + 登录探针)。
+ * URL 与探针清单源自对蚁小二平台注册表/登录探测表(platformMapsIn)的逆向提取
+ * (公开事实:各平台创作者后台自己的接口与 localStorage 键),实现为原创代码。
  */
 
 export interface PlatformDef {
@@ -16,6 +17,21 @@ export interface PlatformDef {
   loggedInUrlPatterns: string[]
   /** 判定"在登录页"的 URL 特征片段 */
   loginUrlPatterns: string[]
+  /**
+   * 登录成功探针(学习自蚁小二 platformMapsIn 探针表,原创实现):
+   * 监听页面自身的接口流量(与 listenFetch 同款思路,但纯观察不注入),
+   * 或检查 localStorage 键;任一命中即视为已登录。
+   */
+  probe?: LoginProbe
+}
+
+export interface LoginProbe {
+  /** 监听响应 URL 中的特征片段 */
+  urlPattern?: string
+  /** 响应 JSON 中任一存在的点分路径 */
+  keyPaths?: string[]
+  /** 存在任一即视为已登录的 localStorage 键 */
+  localStorageKeys?: string[]
 }
 
 export const PLATFORMS: readonly PlatformDef[] = [
@@ -26,6 +42,7 @@ export const PLATFORMS: readonly PlatformDef[] = [
     publishUrl: 'https://creator.xiaohongshu.com/publish/publish',
     loggedInUrlPatterns: ['creator.xiaohongshu.com/new', 'creator.xiaohongshu.com/publish'],
     loginUrlPatterns: ['creator.xiaohongshu.com/login', 'www.xiaohongshu.com'],
+    probe: { urlPattern: '/galaxy/creator/home/personal_info', keyPaths: ['data.red_num'] },
   },
   {
     id: 'bilibili', name: 'B站',
@@ -34,6 +51,7 @@ export const PLATFORMS: readonly PlatformDef[] = [
     publishUrl: 'https://member.bilibili.com/platform/upload/video/frame',
     loggedInUrlPatterns: ['member.bilibili.com/platform'],
     loginUrlPatterns: ['passport.bilibili.com'],
+    probe: { urlPattern: '/x/passport-login/web/cookie/info', keyPaths: ['data.isLogin'] },
   },
   {
     id: 'douyin', name: '抖音',
@@ -42,6 +60,8 @@ export const PLATFORMS: readonly PlatformDef[] = [
     publishUrl: 'https://creator.douyin.com/creator-micro/content/upload',
     loggedInUrlPatterns: ['creator.douyin.com/creator-micro'],
     loginUrlPatterns: ['creator.douyin.com/root', 'douyin.com/passport'],
+    // 蚁小二 waitForLoginFinish 判据:风控 SDK 密钥落进 localStorage 即已登录
+    probe: { localStorageKeys: ['s_sdk_crypt_sdk', 's_sdk_sign_data_key', 'web_protect'] },
   },
   {
     id: 'kuaishou', name: '快手',
@@ -50,6 +70,7 @@ export const PLATFORMS: readonly PlatformDef[] = [
     publishUrl: 'https://cp.kuaishou.com/article/publish/video',
     loggedInUrlPatterns: ['cp.kuaishou.com/profile'],
     loginUrlPatterns: ['passport.kuaishou.com'],
+    probe: { urlPattern: 'creator/pc/home/userInfo', keyPaths: ['data.coreUserInfo'] },
   },
   {
     id: 'shipinhao', name: '视频号',
@@ -58,6 +79,7 @@ export const PLATFORMS: readonly PlatformDef[] = [
     publishUrl: 'https://channels.weixin.qq.com/platform/post/create',
     loggedInUrlPatterns: ['channels.weixin.qq.com/platform'],
     loginUrlPatterns: ['channels.weixin.qq.com/login'],
+    probe: { urlPattern: 'mmfinderassistant-bin/auth/auth_data', keyPaths: ['data.finderUser'] },
   },
   {
     id: 'gongzhonghao', name: '公众号',
@@ -82,6 +104,7 @@ export const PLATFORMS: readonly PlatformDef[] = [
     publishUrl: 'https://mp.toutiao.com/profile_v4/xigua/upload-video',
     loggedInUrlPatterns: ['mp.toutiao.com/profile_v4'],
     loginUrlPatterns: ['mp.toutiao.com/auth'],
+    probe: { urlPattern: 'agw/creator_center/user_info', keyPaths: ['data.user_id_str'] },
   },
   {
     id: 'baijiahao', name: '百家号',
@@ -90,6 +113,7 @@ export const PLATFORMS: readonly PlatformDef[] = [
     publishUrl: 'https://baijiahao.baidu.com/builder/rc/edit',
     loggedInUrlPatterns: ['baijiahao.baidu.com/builder/rc'],
     loginUrlPatterns: ['baijiahao.baidu.com/builder/theme/bjh/login'],
+    probe: { urlPattern: 'builder/app/appinfo', keyPaths: ['data.user'] },
   },
   {
     id: 'zhihu', name: '知乎',
@@ -98,6 +122,7 @@ export const PLATFORMS: readonly PlatformDef[] = [
     publishUrl: 'https://zhihu.com/zvideo/upload-video',
     loggedInUrlPatterns: ['zhihu.com/creator'],
     loginUrlPatterns: ['zhihu.com/signin'],
+    probe: { urlPattern: 'api/v4/me', keyPaths: ['uid', 'data.uid'] },
   },
 ]
 
