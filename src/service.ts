@@ -45,38 +45,42 @@ function getPath(value: unknown, path: string): unknown {
  */
 export async function detectLoggedIn(platform: PlatformDef, browser: BrowserManager): Promise<boolean> {
   const context = await browser.contextFor(platform.id)
-  const blockedSelectors = platform.probe?.blockedBySelectors
-
-  // 0) 反证优先(最强信号):任何页面出现登录表单即未登录
-  //    (抖音等 SPA 登录页不换 URL,URL 判定会假阳性,必须先反证)
-  if (blockedSelectors !== undefined && blockedSelectors.length > 0) {
-    for (const candidate of context.pages()) {
-      const blocked = await candidate.$(blockedSelectors[0]!).catch(() => null)
-      if (blocked !== null) return false
-    }
-  }
-
-  for (const candidate of context.pages()) {
-    try {
-      if (detectLoginState(platform, candidate.url()) === 'logged-in') return true
-    } catch { /* page closed mid-check */ }
-  }
+  const probe = platform.probe
+  const blockedSelectors = probe?.blockedBySelectors
 
   const page = await browser.openPage(platform.id, platform.homeUrl)
-  // 打开首页后再次反证(登录页内容可能伪装成后台 URL,如抖音)
+
+  // 先让页面完全渲染(SPA 登录表单渲染晚,过早检查会漏掉)
+  await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {})
+  await page.waitForLoadState('networkidle', { timeout: 12_000 }).catch(() => {})
+  await sleep(2000)
+
+  // 1) 反证:登录表单可见 = 未登录(最强信号)
   if (blockedSelectors !== undefined && blockedSelectors.length > 0) {
     for (const selector of blockedSelectors) {
       const blocked = await page.$(selector).catch(() => null)
       if (blocked !== null) return false
     }
   }
-  const probe = platform.probe
 
-  if (probe !== undefined) {
+  // 2) 文本反证:登录页文案出现 = 未登录
+  if (probe?.bodyTextOut !== undefined) {
+    const text = await page.evaluate(() => document.body.innerText).catch(() => '')
+    if (probe.bodyTextOut.some((marker) => text.includes(marker))) return false
+  }
+
+  // 3) 文本正证:后台文案出现 = 已登录
+  if (probe?.bodyTextIn !== undefined) {
+    const text = await page.evaluate(() => document.body.innerText).catch(() => '')
+    if (probe.bodyTextIn.some((marker) => text.includes(marker))) return true
+  }
+
+  // 4) 接口探针(监听页面自然流量)
+  if (probe?.urlPattern !== undefined) {
     const matched: PwResponse[] = []
     const onResponse = (response: PwResponse): void => {
       try {
-        if (probe.urlPattern !== undefined && response.url().includes(probe.urlPattern)) matched.push(response)
+        if (response.url().includes(probe.urlPattern!)) matched.push(response)
       } catch { /* ignore */ }
     }
     page.on('response', onResponse)
@@ -84,21 +88,23 @@ export async function detectLoggedIn(platform: PlatformDef, browser: BrowserMana
     await page.waitForLoadState('networkidle', { timeout: 12_000 }).catch(() => {})
     await sleep(2000)
     page.off('response', onResponse)
-
     for (const response of matched) {
       try {
         const json = (await response.json()) as unknown
         if (probe.keyPaths?.some((path) => getPath(json, path) !== undefined)) return true
       } catch { /* 非 JSON 或读取失败 */ }
     }
-    if (probe.localStorageKeys !== undefined) {
-      const hit = await page
-        .evaluate((keys: string[]) => keys.some((key) => localStorage.getItem(key) !== null), probe.localStorageKeys)
-        .catch(() => false)
-      if (hit === true) return true
-    }
   }
 
+  // 5) localStorage 键(仅用于已知可靠键;抖音此类键登录页也有,已弃用)
+  if (probe?.localStorageKeys !== undefined) {
+    const hit = await page
+      .evaluate((keys: string[]) => keys.some((key) => localStorage.getItem(key) !== null), probe.localStorageKeys)
+      .catch(() => false)
+    if (hit === true) return true
+  }
+
+  // 6) 兜底:URL 判定
   return detectLoginState(platform, page.url()) === 'logged-in'
 }
 
@@ -108,6 +114,12 @@ async function quickCheck(platform: PlatformDef, browser: BrowserManager): Promi
   const blockedSelectors = platform.probe?.blockedBySelectors
   for (const candidate of context.pages()) {
     try {
+      // 文本反证优先(登录页文案 = 未登录)
+      const outMarkers = platform.probe?.bodyTextOut
+      if (outMarkers !== undefined) {
+        const text = await candidate.evaluate(() => document.body.innerText).catch(() => '')
+        if (outMarkers.some((marker) => text.includes(marker))) continue
+      }
       if (detectLoginState(platform, candidate.url()) === 'logged-in') {
         // 反证:登录表单可见则视为未登录
         if (blockedSelectors !== undefined && blockedSelectors.length > 0) {
@@ -117,6 +129,14 @@ async function quickCheck(platform: PlatformDef, browser: BrowserManager): Promi
         return true
       }
     } catch { /* page closed mid-check */ }
+  }
+  // 文本正证(后台文案 = 已登录)
+  const inMarkers = platform.probe?.bodyTextIn
+  if (inMarkers !== undefined) {
+    for (const page of context.pages()) {
+      const text = await page.evaluate(() => document.body.innerText).catch(() => '')
+      if (inMarkers.some((marker) => text.includes(marker))) return true
+    }
   }
   const keys = platform.probe?.localStorageKeys
   if (keys !== undefined && keys.length > 0) {

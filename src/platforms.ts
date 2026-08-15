@@ -42,6 +42,10 @@ export interface LoginProbe {
   localStorageKeys?: string[]
   /** 存在任一即视为"未登录"(登录表单可见,反证探针)的 CSS 选择器 */
   blockedBySelectors?: string[]
+  /** 页面正文出现任一即视为已登录(登录页不存在)的文本标记 */
+  bodyTextIn?: string[]
+  /** 页面正文出现任一即视为未登录(登录页文案)的文本标记 */
+  bodyTextOut?: string[]
 }
 
 /**
@@ -97,11 +101,14 @@ export const PLATFORMS: readonly PlatformDef[] = [
     // 只用后台首页精确匹配;反证用"手机号输入框存在=登录页"
     loggedInUrlPatterns: ['creator.douyin.com/creator-micro/home'],
     loginUrlPatterns: ['creator.douyin.com/root', 'douyin.com/passport'],
-    // 蚁小二 waitForLoginFinish 判据:风控 SDK 密钥落进 localStorage 即已登录;
-    // 但登录页也会初始化该 SDK → 用"登录表单可见"反证(手机号输入框存在=未登录)
+    // 登录判定(实测校准):
+    // - 登录页必有「扫码登录/我是创作者」,已登录页没有 → 反证
+    // - 已登录页有「内容管理」导航,登录页没有(登录页只有"作品发布及管理"文案)→ 正证
+    // - localStorage 风控密钥在登录页也存在,不可靠 → 不用
     probe: {
-      localStorageKeys: ['s_sdk_crypt_sdk', 's_sdk_sign_data_key', 'web_protect'],
       blockedBySelectors: ['input[placeholder="请输入手机号"]', '#normal-input'],
+      bodyTextOut: ['扫码登录', '我是创作者'],
+      bodyTextIn: ['内容管理'],
     },
     publish: {
       videoInputSelector: '#joyride-wrapper input[type="file"]',
