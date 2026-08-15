@@ -56,6 +56,19 @@ interface PlatformView {
 
 type PanelTab = 'accounts' | 'queue' | 'drafts' | 'stats' | 'settings'
 
+type TaskStatus = 'queued' | 'uploading' | 'publishing' | 'done' | 'failed'
+
+interface TaskView {
+  id: string
+  platform: string
+  title: string
+  status: TaskStatus
+  step: string
+  message?: string
+  createdAt: number
+  updatedAt: number
+}
+
 interface WidecastSnapshot {
   readonly open: boolean
   readonly busy: boolean
@@ -64,12 +77,13 @@ interface WidecastSnapshot {
   readonly tab: PanelTab
   readonly accounts: readonly AccountView[]
   readonly platforms: readonly PlatformView[]
+  readonly tasks: readonly TaskView[]
   readonly hint?: string
   readonly error?: string
 }
 
 const INITIAL: WidecastSnapshot = {
-  open: false, busy: false, available: true, tab: 'accounts', accounts: [], platforms: [],
+  open: false, busy: false, available: true, tab: 'accounts', accounts: [], platforms: [], tasks: [],
 }
 
 class WidecastController {
@@ -96,7 +110,7 @@ class WidecastController {
       this.patch({ available: false, error: String(error) })
       return
     }
-    await Promise.all([this.loadAccounts(), this.loadPlatforms()])
+    await Promise.all([this.loadAccounts(), this.loadPlatforms(), this.loadTasks()])
   }
 
   open = (): void => {
@@ -106,7 +120,19 @@ class WidecastController {
 
   close = (): void => this.patch({ open: false })
 
-  setTab = (tab: PanelTab): void => this.patch({ tab })
+  setTab = (tab: PanelTab): void => {
+    this.patch({ tab })
+    if (tab === 'queue') void this.loadTasks()
+  }
+
+  async loadTasks(): Promise<void> {
+    try {
+      const result = await this.call<{ tasks: Array<TaskView & { input?: { title?: string } }> }>('publish.list', {})
+      this.patch({ tasks: result.tasks.map((task) => ({ ...task, title: task.input?.title ?? '' })) })
+    } catch (error) {
+      this.patch({ error: String(error) })
+    }
+  }
 
   async loadAccounts(): Promise<void> {
     try {
@@ -312,6 +338,45 @@ function PlaceholderTab({ tab, t }: { tab: PanelTab; t: Translator }): ReactNode
   return <p className="widecastEmpty">{t('placeholder')}{t(`tab.${tab}`)}({t('placeholder.dev')})</p>
 }
 
+function taskDot(status: TaskStatus): StateDotState {
+  switch (status) {
+    case 'done': return 'done'
+    case 'failed': return 'error'
+    default: return 'ongoing'
+  }
+}
+
+function taskLabel(status: TaskStatus, t: Translator): string {
+  switch (status) {
+    case 'queued': return t('task.queued')
+    case 'uploading': return t('task.uploading')
+    case 'publishing': return t('task.publishing')
+    case 'done': return t('task.done')
+    case 'failed': return t('task.failed')
+  }
+}
+
+function QueueTab({ snapshot, t }: { snapshot: WidecastSnapshot; t: Translator }): ReactNode {
+  if (snapshot.tasks.length === 0) return <p className="widecastEmpty">{t('task.empty')}</p>
+  return (
+    <ul className="widecastAccountList">
+      {snapshot.tasks.map((task) => (
+        <li className="widecastAccountRow" key={task.id}>
+          <StateDot state={taskDot(task.status)} size={8} className="widecastAccountDot" />
+          <div className="widecastAccountMeta">
+            <strong>{task.platform}{task.title !== '' ? ` · ${task.title}` : ''}</strong>
+            <p>
+              {taskLabel(task.status, t)}
+              {task.message !== undefined && task.message !== '' ? ` · ${task.message}` : ''}
+              {' · '}{new Date(task.createdAt).toLocaleTimeString()}
+            </p>
+          </div>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 function WidecastPanel({ controller, t }: SharedProps): ReactNode {
   const snapshot = useWidecast(controller)
   return (
@@ -326,7 +391,9 @@ function WidecastPanel({ controller, t }: SharedProps): ReactNode {
       <TabBar snapshot={snapshot} controller={controller} t={t} />
       {snapshot.error !== undefined ? <div className="widecastError" role="alert">{snapshot.error}</div> : null}
       {!snapshot.available ? <div className="widecastError" role="alert">{t('summary.unavailable')}</div> : null}
-      {snapshot.tab === 'accounts' ? <AccountsTab snapshot={snapshot} controller={controller} t={t} /> : <PlaceholderTab tab={snapshot.tab} t={t} />}
+      {snapshot.tab === 'accounts' ? <AccountsTab snapshot={snapshot} controller={controller} t={t} /> : null}
+      {snapshot.tab === 'queue' ? <QueueTab snapshot={snapshot} t={t} /> : null}
+      {snapshot.tab !== 'accounts' && snapshot.tab !== 'queue' ? <PlaceholderTab tab={snapshot.tab} t={t} /> : null}
       <p className="widecastVersion">{t('version.label')} v{WIDECAST_VERSION}</p>
     </Modal>
   )
@@ -340,6 +407,8 @@ const en: Record<string, string> = {
   'account.addTitle': 'Add platform', 'account.add': 'Add', 'account.remove': 'Remove', 'account.allAdded': 'All platforms added.',
   'account.ok': 'Online', 'account.expired': 'Expired', 'account.unknown': 'Unknown',
   'placeholder': 'The ', 'placeholder.dev': ' tab is under development.',
+  'task.empty': 'No publish tasks yet. Use the widecast_publish tool or ask the agent to publish.',
+  'task.queued': 'Queued', 'task.uploading': 'Uploading', 'task.publishing': 'Publishing', 'task.done': 'Done', 'task.failed': 'Failed',
   'version.label': 'Version',
 }
 
@@ -351,6 +420,8 @@ const zh: Record<string, string> = {
   'account.addTitle': '添加平台', 'account.add': '登录', 'account.remove': '移除', 'account.allAdded': '已全部添加。',
   'account.ok': '在线', 'account.expired': '已失效', 'account.unknown': '未知',
   'placeholder': '', 'placeholder.dev': 'tab 开发中。',
+  'task.empty': '还没有发布任务。对 agent 说"帮我把这个视频发到抖音"即可。',
+  'task.queued': '排队中', 'task.uploading': '上传中', 'task.publishing': '发布中', 'task.done': '完成', 'task.failed': '失败',
   'version.label': '版本',
 }
 

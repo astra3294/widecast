@@ -14,7 +14,9 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { RPC_CHANNEL, WIDECAST_VERSION } from './constants.js'
 import { PLATFORMS } from './platforms.js'
+import { PublishService } from './publish.js'
 import { WidecastService } from './service.js'
+import { TaskStore } from './tasks.js'
 
 export const name = 'widecast'
 export const inject = ['connection', 'tools']
@@ -72,6 +74,8 @@ const PLATFORM_IDS = PLATFORMS.map((platform) => platform.id)
 
 export function apply(ctx: HostContext): void {
   const service = new WidecastService(baseDir())
+  const tasks = new TaskStore(baseDir())
+  const publishService = new PublishService(service.browser, tasks)
 
   // ---- 面板 RPC(loopback)----
   ctx.effect(
@@ -111,6 +115,27 @@ export function apply(ctx: HostContext): void {
               case 'accounts.remove': {
                 const platform = typeof payload.platform === 'string' ? payload.platform : ''
                 return { ok: true, value: service.removeAccount(platform) }
+              }
+              case 'publish.list':
+                return { ok: true, value: { tasks: publishService.listTasks() } }
+              case 'publish.start': {
+                const platform = typeof payload.platform === 'string' ? payload.platform : ''
+                const input = (typeof payload.input === 'object' && payload.input !== null && !Array.isArray(payload.input))
+                  ? payload.input as Record<string, unknown>
+                  : {}
+                const normalized = {
+                  title: typeof input.title === 'string' ? input.title : '',
+                  ...(typeof input.description === 'string' ? { description: input.description } : {}),
+                  ...(typeof input.videoPath === 'string' ? { videoPath: input.videoPath } : {}),
+                  ...(typeof input.coverPath === 'string' ? { coverPath: input.coverPath } : {}),
+                  ...(Array.isArray(input.imagePaths) ? { imagePaths: input.imagePaths.filter((x): x is string => typeof x === 'string') } : {}),
+                  ...(Array.isArray(input.tags) ? { tags: input.tags.filter((x): x is string => typeof x === 'string') } : {}),
+                }
+                return { ok: true, value: publishService.start(platform, normalized) }
+              }
+              case 'publish.status': {
+                const taskId = typeof payload.taskId === 'string' ? payload.taskId : ''
+                return { ok: true, value: { task: publishService.getTask(taskId) } }
               }
               default:
                 return {
@@ -286,6 +311,97 @@ export function apply(ctx: HostContext): void {
     },
     async execute(args) {
       return service.removeAccount(String(args.platform))
+    },
+  })
+
+  ctx.tools.register({
+    name: 'widecast_publish',
+    description:
+      '发布一篇内容(视频或图文)到指定平台。浏览器模式:在真人登录过的真实浏览器里自动完成上传与发布,提交后返回任务 id,用 widecast_get_task_status 查询进度。videoPath/imagePaths 必须是本机绝对路径。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        platform: { type: 'string', description: '平台 id', enum: PLATFORM_IDS },
+        title: { type: 'string', description: '标题' },
+        description: { type: 'string', description: '简介/正文(可选)' },
+        videoPath: { type: 'string', description: '视频文件绝对路径(可选)' },
+        coverPath: { type: 'string', description: '封面图绝对路径(可选)' },
+        imagePaths: { type: 'array', items: { type: 'string' }, description: '图片绝对路径列表(图文用)' },
+        tags: { type: 'array', items: { type: 'string' }, description: '话题/标签(可选)' },
+      },
+      required: ['platform', 'title'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean' },
+          message: { type: 'string' },
+          task: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string' },
+              platform: { type: 'string' },
+              status: { type: 'string', enum: ['queued', 'uploading', 'publishing', 'done', 'failed'] },
+              step: { type: 'string' },
+              message: { type: 'string' },
+            },
+            required: ['id', 'platform', 'status'],
+          },
+        },
+        required: ['ok'],
+      },
+      render: renderJson,
+    },
+    async execute(args) {
+      const input: Record<string, unknown> = { title: String(args.title) }
+      if (typeof args.description === 'string' && args.description !== '') input.description = args.description
+      if (typeof args.videoPath === 'string' && args.videoPath !== '') input.videoPath = args.videoPath
+      if (typeof args.coverPath === 'string' && args.coverPath !== '') input.coverPath = args.coverPath
+      if (Array.isArray(args.imagePaths)) input.imagePaths = args.imagePaths.map(String)
+      if (Array.isArray(args.tags)) input.tags = args.tags.map(String)
+      return publishService.start(String(args.platform), input as never)
+    },
+  })
+
+  ctx.tools.register({
+    name: 'widecast_get_task_status',
+    description: '查询发布任务的进度(排队中/上传中/发布中/完成/失败及原因)。taskId 来自 widecast_publish。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        taskId: { type: 'string', description: '任务 id' },
+      },
+      required: ['taskId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          task: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string' },
+              platform: { type: 'string' },
+              status: { type: 'string', enum: ['queued', 'uploading', 'publishing', 'done', 'failed'] },
+              step: { type: 'string' },
+              message: { type: 'string' },
+            },
+            required: ['id', 'platform', 'status'],
+          },
+        },
+        required: ['task'],
+      },
+      render: renderJson,
+    },
+    async execute(args) {
+      return { task: publishService.getTask(String(args.taskId)) }
     },
   })
 }

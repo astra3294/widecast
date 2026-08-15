@@ -23,6 +23,8 @@ export interface PlatformDef {
    * 或检查 localStorage 键;任一命中即视为已登录。
    */
   probe?: LoginProbe
+  /** 发布流程配置(选择器学习自蚁小二 RPA 模板) */
+  publish?: PublishPlan
 }
 
 export interface LoginProbe {
@@ -32,6 +34,28 @@ export interface LoginProbe {
   keyPaths?: string[]
   /** 存在任一即视为已登录的 localStorage 键 */
   localStorageKeys?: string[]
+  /** 存在任一即视为"未登录"(登录表单可见,反证探针)的 CSS 选择器 */
+  blockedBySelectors?: string[]
+}
+
+/**
+ * 发布流程配置(选择器学习自蚁小二 RPA 模板,原创实现)。
+ */
+export interface PublishPlan {
+  /** 视频文件 input 选择器(setInputFiles 目标) */
+  videoInputSelector?: string
+  /** 标题输入框选择器 */
+  titleInputSelector?: string
+  /** 简介/正文编辑区选择器 */
+  descInputSelector?: string
+  /** 封面文件 input 选择器 */
+  coverInputSelector?: string
+  /** 发布按钮文本候选(按序尝试) */
+  publishButtonTexts: string[]
+  /** 发布成功/进入审核的提示文本候选 */
+  successTexts: string[]
+  /** 标题最大长度(超出截断) */
+  titleMaxLength?: number
 }
 
 export const PLATFORMS: readonly PlatformDef[] = [
@@ -60,8 +84,20 @@ export const PLATFORMS: readonly PlatformDef[] = [
     publishUrl: 'https://creator.douyin.com/creator-micro/content/upload',
     loggedInUrlPatterns: ['creator.douyin.com/creator-micro'],
     loginUrlPatterns: ['creator.douyin.com/root', 'douyin.com/passport'],
-    // 蚁小二 waitForLoginFinish 判据:风控 SDK 密钥落进 localStorage 即已登录
-    probe: { localStorageKeys: ['s_sdk_crypt_sdk', 's_sdk_sign_data_key', 'web_protect'] },
+    // 蚁小二 waitForLoginFinish 判据:风控 SDK 密钥落进 localStorage 即已登录;
+    // 但登录页也会初始化该 SDK → 用"登录表单可见"反证(手机号输入框存在=未登录)
+    probe: {
+      localStorageKeys: ['s_sdk_crypt_sdk', 's_sdk_sign_data_key', 'web_protect'],
+      blockedBySelectors: ['#normal-input'],
+    },
+    publish: {
+      videoInputSelector: '#joyride-wrapper input[type="file"]',
+      titleInputSelector: 'input[placeholder="填写作品标题，为作品获得更多流量"]',
+      descInputSelector: '.zone-container.editor-kit-container.editor',
+      publishButtonTexts: ['发布', '发表', '发 布', '立即投稿'],
+      successTexts: ['发布成功', '已发布', '审核中', '作品已提交'],
+      titleMaxLength: 29,
+    },
   },
   {
     id: 'kuaishou', name: '快手',

@@ -54,6 +54,13 @@ async function detectLoggedIn(platform: PlatformDef, browser: BrowserManager): P
   const probe = platform.probe
 
   if (probe !== undefined) {
+    // 反证探针:登录表单可见 = 未登录(如抖音手机号输入框)
+    if (probe.blockedBySelectors !== undefined) {
+      for (const selector of probe.blockedBySelectors) {
+        const blocked = await page.$(selector).catch(() => null)
+        if (blocked !== null) return false
+      }
+    }
     const matched: PwResponse[] = []
     const onResponse = (response: PwResponse): void => {
       try {
@@ -83,17 +90,29 @@ async function detectLoggedIn(platform: PlatformDef, browser: BrowserManager): P
   return detectLoginState(platform, page.url()) === 'logged-in'
 }
 
-/** 轻量快检(登录引导轮询用):URL 扫描 + localStorage 探针,不做 reload。 */
+/** 轻量快检(登录引导轮询用):URL 扫描 + 反证 + localStorage 探针,不做 reload。 */
 async function quickCheck(platform: PlatformDef, browser: BrowserManager): Promise<boolean> {
   const context = await browser.contextFor(platform.id)
+  const blockedSelectors = platform.probe?.blockedBySelectors
   for (const candidate of context.pages()) {
     try {
-      if (detectLoginState(platform, candidate.url()) === 'logged-in') return true
+      if (detectLoginState(platform, candidate.url()) === 'logged-in') {
+        // 反证:登录表单可见则视为未登录
+        if (blockedSelectors !== undefined && blockedSelectors.length > 0) {
+          const blocked = await candidate.$(blockedSelectors[0]!).catch(() => null)
+          if (blocked !== null) continue
+        }
+        return true
+      }
     } catch { /* page closed mid-check */ }
   }
   const keys = platform.probe?.localStorageKeys
   if (keys !== undefined && keys.length > 0) {
     for (const page of context.pages()) {
+      if (blockedSelectors !== undefined && blockedSelectors.length > 0) {
+        const blocked = await page.$(blockedSelectors[0]!).catch(() => null)
+        if (blocked !== null) continue
+      }
       const hit = await page
         .evaluate((probeKeys: string[]) => probeKeys.some((key) => localStorage.getItem(key) !== null), keys)
         .catch(() => false)
