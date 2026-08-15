@@ -45,6 +45,16 @@ function getPath(value: unknown, path: string): unknown {
  */
 export async function detectLoggedIn(platform: PlatformDef, browser: BrowserManager): Promise<boolean> {
   const context = await browser.contextFor(platform.id)
+  const blockedSelectors = platform.probe?.blockedBySelectors
+
+  // 0) 反证优先(最强信号):任何页面出现登录表单即未登录
+  //    (抖音等 SPA 登录页不换 URL,URL 判定会假阳性,必须先反证)
+  if (blockedSelectors !== undefined && blockedSelectors.length > 0) {
+    for (const candidate of context.pages()) {
+      const blocked = await candidate.$(blockedSelectors[0]!).catch(() => null)
+      if (blocked !== null) return false
+    }
+  }
 
   for (const candidate of context.pages()) {
     try {
@@ -53,16 +63,16 @@ export async function detectLoggedIn(platform: PlatformDef, browser: BrowserMana
   }
 
   const page = await browser.openPage(platform.id, platform.homeUrl)
+  // 打开首页后再次反证(登录页内容可能伪装成后台 URL,如抖音)
+  if (blockedSelectors !== undefined && blockedSelectors.length > 0) {
+    for (const selector of blockedSelectors) {
+      const blocked = await page.$(selector).catch(() => null)
+      if (blocked !== null) return false
+    }
+  }
   const probe = platform.probe
 
   if (probe !== undefined) {
-    // 反证探针:登录表单可见 = 未登录(如抖音手机号输入框)
-    if (probe.blockedBySelectors !== undefined) {
-      for (const selector of probe.blockedBySelectors) {
-        const blocked = await page.$(selector).catch(() => null)
-        if (blocked !== null) return false
-      }
-    }
     const matched: PwResponse[] = []
     const onResponse = (response: PwResponse): void => {
       try {
