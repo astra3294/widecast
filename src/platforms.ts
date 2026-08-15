@@ -123,7 +123,7 @@ export const PLATFORMS: readonly PlatformDef[] = [
     publishImageUrl: 'https://creator.douyin.com/creator-micro/content/upload?default-tab=3',
     publishImage: {
       imageInputSelector: '.semi-tabs-pane-motion-overlay input[accept="image/png,image/jpeg,image/jpg,image/bmp,image/webp,image/tif"][multiple]',
-      titleInputSelector: '.semi-input-wrapper input[placeholder="添加作品标题"]',
+      titleInputSelector: 'input[placeholder="添加作品标题"]',
       descInputSelector: '.editor.editor-comp-publish',
       publishButtonTexts: ['发布', '发表', '发 布'],
       confirmButtonTexts: ['确认发布', '确定', '知道了', '继续发布', '立即发布'],
