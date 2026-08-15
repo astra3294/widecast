@@ -93,5 +93,8 @@
   "publishConfig": {
     "access": "public",
     "provenance": true
+  },
+  "dependencies": {
+    "playwright": "^1.62.1"
   }
 }

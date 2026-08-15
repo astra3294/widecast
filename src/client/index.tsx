@@ -7,7 +7,7 @@
  * 宿主通信:ctx.get('connection').rpc.call('/widecast', endpoint, payload)
  */
 import { useSyncExternalStore, type ReactNode, type SVGProps } from 'react'
-import { Modal, StateDot, type StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Modal, StateDot, type StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import { RPC_CHANNEL, WIDECAST_VERSION } from '../constants.js'
 import { installWidecastStyles } from './styles.js'
@@ -37,16 +37,40 @@ interface Connection {
   }
 }
 
+type AccountStatus = 'ok' | 'expired' | 'unknown'
+
+interface AccountView {
+  platform: string
+  name: string
+  status: AccountStatus
+  addedAt: number
+  lastCheckedAt?: number
+  lastError?: string
+}
+
+interface PlatformView {
+  id: string
+  name: string
+  publishUrl?: string
+}
+
+type PanelTab = 'accounts' | 'queue' | 'drafts' | 'stats' | 'settings'
+
 interface WidecastSnapshot {
   readonly open: boolean
   readonly busy: boolean
   readonly available: boolean
   readonly version?: string
+  readonly tab: PanelTab
+  readonly accounts: readonly AccountView[]
+  readonly platforms: readonly PlatformView[]
   readonly hint?: string
   readonly error?: string
 }
 
-const INITIAL: WidecastSnapshot = { open: false, busy: false, available: true }
+const INITIAL: WidecastSnapshot = {
+  open: false, busy: false, available: true, tab: 'accounts', accounts: [], platforms: [],
+}
 
 class WidecastController {
   private snapshot: WidecastSnapshot = INITIAL
@@ -66,16 +90,13 @@ class WidecastController {
     if (this.initialized) return
     this.initialized = true
     try {
-      const result = await this.connection.rpc.call(RPC_CHANNEL, 'hello', {})
-      if (result.ok) {
-        const value = result.value as { greeting?: string; hint?: string; version?: string }
-        this.patch({ available: true, version: value.version, hint: value.hint })
-      } else {
-        this.patch({ available: false, error: result.error?.message ?? 'host 不可用' })
-      }
+      const result = await this.call<{ version?: string }>('hello', {})
+      this.patch({ available: true, version: result.version })
     } catch (error) {
       this.patch({ available: false, error: String(error) })
+      return
     }
+    await Promise.all([this.loadAccounts(), this.loadPlatforms()])
   }
 
   open = (): void => {
@@ -85,17 +106,65 @@ class WidecastController {
 
   close = (): void => this.patch({ open: false })
 
-  async ping(): Promise<void> {
+  setTab = (tab: PanelTab): void => this.patch({ tab })
+
+  async loadAccounts(): Promise<void> {
+    try {
+      const result = await this.call<{ accounts: AccountView[] }>('accounts.list', {})
+      this.patch({ accounts: result.accounts })
+    } catch (error) {
+      this.patch({ error: String(error) })
+    }
+  }
+
+  async loadPlatforms(): Promise<void> {
+    try {
+      const result = await this.call<{ platforms: PlatformView[] }>('platforms.list', {})
+      this.patch({ platforms: result.platforms })
+    } catch (error) {
+      this.patch({ error: String(error) })
+    }
+  }
+
+  /** 面板侧添加账号:立即返回登录引导,随后轮询账号状态直至成功或超时。 */
+  async addAccount(platform: string): Promise<void> {
+    this.patch({ busy: true, hint: undefined, error: undefined })
+    try {
+      const result = await this.call<{ message?: string }>('accounts.add', { platform, waitMs: 0 })
+      this.patch({ hint: result.message ?? '请在打开的浏览器窗口完成登录' })
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 3000))
+        await this.loadAccounts()
+        const record = this.snapshot.accounts.find((item) => item.platform === platform)
+        if (record?.status === 'ok') {
+          this.patch({ busy: false, hint: '登录成功,账号已保存' })
+          return
+        }
+      }
+      this.patch({ busy: false, hint: '仍在等待登录;完成后点「全部体检」' })
+    } catch (error) {
+      this.patch({ busy: false, error: String(error) })
+    }
+  }
+
+  async removeAccount(platform: string): Promise<void> {
     this.patch({ busy: true, error: undefined })
     try {
-      const result = await this.connection.rpc.call(RPC_CHANNEL, 'ping', {})
-      if (result.ok) {
-        this.patch({ busy: false, available: true })
-      } else {
-        this.patch({ busy: false, available: false, error: result.error?.message ?? 'ping 失败' })
-      }
+      await this.call('accounts.remove', { platform })
+      await this.loadAccounts()
+      this.patch({ busy: false, hint: undefined })
     } catch (error) {
-      this.patch({ busy: false, available: false, error: String(error) })
+      this.patch({ busy: false, error: String(error) })
+    }
+  }
+
+  async checkAll(): Promise<void> {
+    this.patch({ busy: true, error: undefined })
+    try {
+      const result = await this.call<{ accounts: AccountView[] }>('accounts.check', {})
+      this.patch({ accounts: result.accounts, busy: false })
+    } catch (error) {
+      this.patch({ busy: false, error: String(error) })
     }
   }
 
@@ -103,22 +172,40 @@ class WidecastController {
     this.snapshot = { ...this.snapshot, ...next }
     for (const listener of this.listeners) listener()
   }
+
+  private async call<T>(endpoint: string, payload: unknown): Promise<T> {
+    const result = await this.connection.rpc.call(RPC_CHANNEL, endpoint, payload)
+    if (!result.ok) throw new Error(result.error?.message ?? `${endpoint} failed`)
+    return result.value as T
+  }
 }
 
 function useWidecast(controller: WidecastController): WidecastSnapshot {
   return useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
 }
 
-function dotState(snapshot: WidecastSnapshot): StateDotState {
-  if (!snapshot.available) return 'error'
-  if (snapshot.busy) return 'ongoing'
-  return 'done'
+function statusDot(status: AccountStatus): StateDotState {
+  switch (status) {
+    case 'ok': return 'done'
+    case 'expired': return 'error'
+    default: return 'ongoing'
+  }
+}
+
+function statusLabel(status: AccountStatus, t: Translator): string {
+  switch (status) {
+    case 'ok': return t('account.ok')
+    case 'expired': return t('account.expired')
+    default: return t('account.unknown')
+  }
 }
 
 interface SharedProps {
   controller: WidecastController
   t: Translator
 }
+
+const TABS: readonly PanelTab[] = ['accounts', 'queue', 'drafts', 'stats', 'settings']
 
 function WidecastSidebarButton({ controller, t, wide }: SharedProps & { wide: boolean }): ReactNode {
   const snapshot = useWidecast(controller)
@@ -134,10 +221,82 @@ function WidecastSidebarButton({ controller, t, wide }: SharedProps & { wide: bo
     >
       <BroadcastIcon size={16} aria-hidden="true" />
       {wide ? <span className="widecastSidebarLabel">{t('name')}</span> : null}
-      <StateDot state={dotState(snapshot)} size={8} className="widecastSidebarStatus" />
+      <StateDot state={snapshot.available ? 'done' : 'error'} size={8} className="widecastSidebarStatus" />
       <span className="widecastVisuallyHidden">{t('name')}</span>
     </button>
   )
+}
+
+function TabBar({ snapshot, controller, t }: SharedProps & { snapshot: WidecastSnapshot }): ReactNode {
+  return (
+    <div className="widecastTabs" role="tablist">
+      {TABS.map((tab) => (
+        <button
+          key={tab}
+          type="button"
+          role="tab"
+          aria-selected={snapshot.tab === tab}
+          data-active={String(snapshot.tab === tab)}
+          className="widecastTab"
+          onClick={() => controller.setTab(tab)}
+        >
+          {t(`tab.${tab}`)}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function AccountsTab({ snapshot, controller, t }: SharedProps & { snapshot: WidecastSnapshot }): ReactNode {
+  const added = new Set(snapshot.accounts.map((item) => item.platform))
+  const addable = snapshot.platforms.filter((platform) => !added.has(platform.id))
+  return (
+    <div className="widecastAccounts">
+      {snapshot.hint !== undefined ? <div className="widecastHint" role="status">{snapshot.hint}</div> : null}
+      <div className="widecastActions">
+        <Button variant="ghost" size="sm" disabled={snapshot.busy} onClick={() => { void controller.checkAll() }}>
+          {t('account.checkAll')}
+        </Button>
+      </div>
+      {snapshot.accounts.length === 0 ? (
+        <p className="widecastEmpty">{t('account.empty')}</p>
+      ) : (
+        <ul className="widecastAccountList">
+          {snapshot.accounts.map((account) => (
+            <li className="widecastAccountRow" key={account.platform}>
+              <StateDot state={statusDot(account.status)} size={8} className="widecastAccountDot" />
+              <div className="widecastAccountMeta">
+                <strong>{account.name}</strong>
+                <p>
+                  {statusLabel(account.status, t)}
+                  {account.lastError !== undefined ? ` · ${account.lastError}` : ''}
+                </p>
+              </div>
+              <Button variant="ghost" size="sm" disabled={snapshot.busy} onClick={() => { void controller.removeAccount(account.platform) }}>
+                {t('account.remove')}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <h3 className="widecastGroupTitle">{t('account.addTitle')}</h3>
+      <ul className="widecastPlatformGrid">
+        {addable.map((platform) => (
+          <li className="widecastPlatformRow" key={platform.id}>
+            <span className="widecastPlatformName">{platform.name}</span>
+            <Button variant="outline" size="sm" disabled={snapshot.busy} onClick={() => { void controller.addAccount(platform.id) }}>
+              {t('account.add')}
+            </Button>
+          </li>
+        ))}
+        {addable.length === 0 ? <p className="widecastEmpty">{t('account.allAdded')}</p> : null}
+      </ul>
+    </div>
+  )
+}
+
+function PlaceholderTab({ tab, t }: { tab: PanelTab; t: Translator }): ReactNode {
+  return <p className="widecastEmpty">{t('placeholder')}{t(`tab.${tab}`)}({t('placeholder.dev')})</p>
 }
 
 function WidecastPanel({ controller, t }: SharedProps): ReactNode {
@@ -151,19 +310,10 @@ function WidecastPanel({ controller, t }: SharedProps): ReactNode {
       className="widecastModal"
       contentClassName="widecastModalContent"
     >
-      <div className="widecastSummary">
-        <span className="widecastSummaryIcon" aria-hidden="true"><BroadcastIcon size={18} /></span>
-        <div className="widecastSummaryCopy">
-          <h3>{snapshot.available ? t('status.ready') : t('status.unavailable')}</h3>
-          <p>{snapshot.available ? t('summary.ready') : t('summary.unavailable')}</p>
-        </div>
-        <StateDot state={dotState(snapshot)} size={8} />
-      </div>
+      <TabBar snapshot={snapshot} controller={controller} t={t} />
       {snapshot.error !== undefined ? <div className="widecastError" role="alert">{snapshot.error}</div> : null}
-      <div className="widecastNotice">
-        <h3>{t('roadmap.title')}</h3>
-        <p className="widecastEmpty">{snapshot.hint ?? t('roadmap.description')}</p>
-      </div>
+      {!snapshot.available ? <div className="widecastError" role="alert">{t('summary.unavailable')}</div> : null}
+      {snapshot.tab === 'accounts' ? <AccountsTab snapshot={snapshot} controller={controller} t={t} /> : <PlaceholderTab tab={snapshot.tab} t={t} />}
       <p className="widecastVersion">{t('version.label')} v{WIDECAST_VERSION}</p>
     </Modal>
   )
@@ -171,21 +321,23 @@ function WidecastPanel({ controller, t }: SharedProps): ReactNode {
 
 const en: Record<string, string> = {
   name: 'Self-Media', open: 'Open Self-Media manager', close: 'Close', title: 'Self-Media Manager',
-  'status.ready': 'Widecast ready', 'status.unavailable': 'Host unavailable',
-  'summary.ready': 'Widecast host is connected; agent tools are available.',
   'summary.unavailable': 'The Widecast host service is unreachable. Reload the page or restart the profile.',
-  'roadmap.title': 'Roadmap',
-  'roadmap.description': 'Account management (P1) and the publish queue (P2) are under development.',
+  'tab.accounts': 'Accounts', 'tab.queue': 'Publish Queue', 'tab.drafts': 'Drafts', 'tab.stats': 'Analytics', 'tab.settings': 'Settings',
+  'account.checkAll': 'Check all', 'account.empty': 'No accounts yet — add a platform below.',
+  'account.addTitle': 'Add platform', 'account.add': 'Add', 'account.remove': 'Remove', 'account.allAdded': 'All platforms added.',
+  'account.ok': 'Online', 'account.expired': 'Expired', 'account.unknown': 'Unknown',
+  'placeholder': 'The ', 'placeholder.dev': ' tab is under development.',
   'version.label': 'Version',
 }
 
 const zh: Record<string, string> = {
   name: '自媒体', open: '打开自媒体管理', close: '关闭', title: '自媒体管理',
-  'status.ready': 'widecast 已就绪', 'status.unavailable': '宿主不可用',
-  'summary.ready': 'widecast 宿主已连接,模型工具可用。',
   'summary.unavailable': '无法连接 widecast 宿主服务,请刷新页面或重启 profile。',
-  'roadmap.title': '开发路线',
-  'roadmap.description': '账号管理(P1)与发布队列(P2)功能开发中。',
+  'tab.accounts': '账号', 'tab.queue': '发布队列', 'tab.drafts': '草稿', 'tab.stats': '数据', 'tab.settings': '设置',
+  'account.checkAll': '全部体检', 'account.empty': '还没有账号,在下方添加平台登录。',
+  'account.addTitle': '添加平台', 'account.add': '登录', 'account.remove': '移除', 'account.allAdded': '已全部添加。',
+  'account.ok': '在线', 'account.expired': '已失效', 'account.unknown': '未知',
+  'placeholder': '', 'placeholder.dev': 'tab 开发中。',
   'version.label': '版本',
 }
 
