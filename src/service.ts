@@ -304,6 +304,52 @@ export class WidecastService {
     }
   }
 
+  /** 删除作品:在内容管理页找到含 titleKey 的作品卡片,点删除并确认。 */
+  async deleteWork(platformId: string, titleKey: string): Promise<{ ok: boolean; message: string }> {
+    const platform = findPlatform(platformId)
+    if (platform === undefined || platform.manageUrl === undefined) {
+      return { ok: false, message: `${platformId} 未配置内容管理页,无法自动删除` }
+    }
+    try {
+      const page = await this.browser.openPage(platformId, platform.manageUrl)
+      await page.waitForLoadState('domcontentloaded', { timeout: 45_000 }).catch(() => {})
+      await sleep(5000)
+      // 在含标题的作品卡片内点击「删除作品」
+      const clicked = await page.evaluate((key: string) => {
+        const buttons = [...document.querySelectorAll('button, [role="button"]')]
+          .filter((el) => (el.textContent ?? '').trim() === '删除作品')
+        for (const button of buttons) {
+          let node: Element | null = button
+          for (let i = 0; i < 8 && node !== null; i += 1) {
+            node = node.parentElement
+            if (node !== null && node.innerText.includes(key)) {
+              ;(button as HTMLButtonElement).click()
+              return true
+            }
+          }
+        }
+        return false
+      }, titleKey)
+      if (!clicked) return { ok: false, message: `未找到标题含「${titleKey}」的作品` }
+      await sleep(2000)
+      // 确认弹窗:点「删除/确定」
+      for (const text of ['删除', '确定']) {
+        const exact = page.getByRole('button', { name: text, exact: true })
+        if (await exact.count() > 0 && await exact.first().isVisible().catch(() => false)) {
+          await exact.first().click({ timeout: 10_000 }).catch(() => {})
+          break
+        }
+      }
+      await sleep(3000)
+      const gone = await page.evaluate((key: string) => !document.body.innerText.includes(key), titleKey)
+      return gone
+        ? { ok: true, message: '已删除' }
+        : { ok: false, message: '已点击删除,但页面仍显示该作品(可能有确认步骤),请人工确认' }
+    } catch (error) {
+      return { ok: false, message: String(error) }
+    }
+  }
+
   dispose(): void {
     void this.browser.closeAll()
   }

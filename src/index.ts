@@ -120,6 +120,11 @@ export function apply(ctx: HostContext): void {
                 const platform = typeof payload.platform === 'string' ? payload.platform : ''
                 return { ok: true, value: await service.logoutAccount(platform) }
               }
+              case 'work.delete': {
+                const platform = typeof payload.platform === 'string' ? payload.platform : ''
+                const titleKey = typeof payload.titleKey === 'string' ? payload.titleKey : ''
+                return { ok: true, value: await service.deleteWork(platform, titleKey) }
+              }
               case 'publish.list':
                 return { ok: true, value: { tasks: publishService.listTasks() } }
               case 'publish.start': {
