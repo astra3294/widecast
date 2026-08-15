@@ -137,6 +137,36 @@ export function apply(ctx: HostContext): void {
                 const taskId = typeof payload.taskId === 'string' ? payload.taskId : ''
                 return { ok: true, value: { task: publishService.getTask(taskId) } }
               }
+              case 'debug.page': {
+                const platform = typeof payload.platform === 'string' ? payload.platform : ''
+                const url = typeof payload.url === 'string' && payload.url !== '' ? payload.url : undefined
+                if (platform === '') return { ok: false, error: { code: 'bad-request', message: 'platform 必填', details: { issues: [] } } }
+                const context = await service.browser.contextFor(platform)
+                const page = url !== undefined
+                  ? await service.browser.openPage(platform, url)
+                  : context.pages()[context.pages().length - 1]
+                if (page === undefined) return { ok: true, value: { page: null, message: '无页面' } }
+                await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {})
+                await new Promise((resolve) => setTimeout(resolve, 1500))
+                const state = await page.evaluate(() => {
+                  const visible = (el: Element): boolean => {
+                    const rect = el.getBoundingClientRect()
+                    const style = getComputedStyle(el)
+                    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
+                  }
+                  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+                    .filter(visible)
+                    .map((el) => (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 30))
+                    .filter(Boolean)
+                  const dialogs = [...document.querySelectorAll('[role="dialog"], .semi-modal, .semi-portal')]
+                    .filter(visible)
+                    .map((el) => (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 300))
+                    .filter(Boolean)
+                  const bodyText = document.body.innerText.slice(0, 800)
+                  return { url: location.href, title: document.title, buttons: [...new Set(buttons)].slice(0, 40), dialogs: dialogs.slice(0, 6), bodyText }
+                })
+                return { ok: true, value: { page: state } }
+              }
               default:
                 return {
                   ok: false,

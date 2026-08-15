@@ -132,19 +132,50 @@ export class PublishService {
         return
       }
 
-      // 5) 轮询成功/审核提示
-      await page.waitForTimeout(3000)
+      // 5) 处理可能出现的确认弹窗(按文本点击确认按钮,最多 30 秒)
+      this.tasks.update(taskId, { status: 'publishing', step: 'confirm-dialog' })
+      const confirmTexts = plan.confirmButtonTexts ?? []
+      if (confirmTexts.length > 0) {
+        const dialogDeadline = Date.now() + 30_000
+        while (Date.now() < dialogDeadline) {
+          let clickedConfirm = false
+          for (const text of confirmTexts) {
+            const button = page.locator(`button:has-text("${text}")`).first()
+            if (await button.count() > 0 && await button.isVisible().catch(() => false)) {
+              await button.click({ timeout: 10_000 }).catch(() => {})
+              clickedConfirm = true
+              break
+            }
+          }
+          if (!clickedConfirm) break
+          await page.waitForTimeout(1500)
+        }
+      }
+
+      // 6) 平台侧确认:打开内容管理页,作品列表出现标题才算发布成功
+      this.tasks.update(taskId, { status: 'publishing', step: 'verify' })
+      const manageUrl = platform.manageUrl
+      if (manageUrl !== undefined) {
+        await page.goto(manageUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => {})
+        await page.waitForTimeout(5000)
+        const titleKey = task.input.title.slice(0, 10)
+        const found = await page.evaluate((key: string) => document.body.innerText.includes(key), titleKey).catch(() => false)
+        if (found) {
+          this.tasks.update(taskId, { status: 'done', step: 'verified', message: '平台侧确认:作品已出现在内容管理列表' })
+          return
+        }
+        this.tasks.update(taskId, { status: 'failed', step: 'verify', message: '已点击发布但内容管理列表未出现该作品(可能被拦截/需人工确认),请查看浏览器窗口' })
+        return
+      }
+
+      // 无内容管理页配置的平台:退回提示文本判定
       for (const text of plan.successTexts) {
         if (await page.getByText(text, { exact: false }).first().isVisible().catch(() => false)) {
           this.tasks.update(taskId, { status: 'done', step: 'done', message: text })
           return
         }
       }
-      const url = page.url()
-      const done = !url.includes('/upload')
-      this.tasks.update(taskId, done
-        ? { status: 'done', step: 'submitted', message: '已提交(等待平台审核),页面已离开上传页' }
-        : { status: 'done', step: 'submitted', message: '已点击发布,结果请到平台确认' })
+      this.tasks.update(taskId, { status: 'failed', step: 'unverified', message: '发布结果无法确认(平台无成功提示),请人工查看' })
     } catch (error) {
       this.tasks.update(taskId, { status: 'failed', step: 'error', message: String(error) })
     } finally {

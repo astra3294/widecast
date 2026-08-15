@@ -15,6 +15,8 @@ export interface PlatformDef {
   publishUrl?: string
   /** 图文模式发布页(如有独立入口) */
   publishImageUrl?: string
+  /** 内容管理/作品列表页(发布后平台侧确认用) */
+  manageUrl?: string
   /** 判定"已登录"的 URL 特征片段 */
   loggedInUrlPatterns: string[]
   /** 判定"在登录页"的 URL 特征片段 */
@@ -58,6 +60,8 @@ export interface PublishPlan {
   coverInputSelector?: string
   /** 发布按钮文本候选(按序尝试) */
   publishButtonTexts: string[]
+  /** 点击发布后可能出现的确认弹窗按钮文本(按序点击) */
+  confirmButtonTexts?: string[]
   /** 发布成功/进入审核的提示文本候选 */
   successTexts: string[]
   /** 标题最大长度(超出截断) */
@@ -88,6 +92,7 @@ export const PLATFORMS: readonly PlatformDef[] = [
     loginUrl: 'https://creator.douyin.com/',
     homeUrl: 'https://creator.douyin.com/creator-micro/home',
     publishUrl: 'https://creator.douyin.com/creator-micro/content/upload',
+    manageUrl: 'https://creator.douyin.com/creator-micro/content/manage',
     loggedInUrlPatterns: ['creator.douyin.com/creator-micro'],
     loginUrlPatterns: ['creator.douyin.com/root', 'douyin.com/passport'],
     // 蚁小二 waitForLoginFinish 判据:风控 SDK 密钥落进 localStorage 即已登录;
@@ -101,6 +106,7 @@ export const PLATFORMS: readonly PlatformDef[] = [
       titleInputSelector: 'input[placeholder="填写作品标题，为作品获得更多流量"]',
       descInputSelector: '.zone-container.editor-kit-container.editor',
       publishButtonTexts: ['发布', '发表', '发 布', '立即投稿'],
+      confirmButtonTexts: ['确认发布', '确定', '知道了', '继续发布', '立即发布'],
       successTexts: ['发布成功', '已发布', '审核中', '作品已提交'],
       titleMaxLength: 29,
     },
@@ -111,6 +117,7 @@ export const PLATFORMS: readonly PlatformDef[] = [
       titleInputSelector: '.semi-input-wrapper input[placeholder="添加作品标题"]',
       descInputSelector: '.editor.editor-comp-publish',
       publishButtonTexts: ['发布', '发表', '发 布'],
+      confirmButtonTexts: ['确认发布', '确定', '知道了', '继续发布', '立即发布'],
       successTexts: ['发布成功', '已发布', '审核中', '作品已提交'],
       titleMaxLength: 30,
     },
