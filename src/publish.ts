@@ -49,14 +49,18 @@ export class PublishService {
       const task = this.tasks.get(taskId)
       if (task === undefined) return
       const platform = findPlatform(task.platform)
-      if (platform === undefined || platform.publish === undefined) {
+      const isImage = task.input.imagePaths !== undefined && task.input.imagePaths.length > 0
+      const plan = isImage
+        ? (platform?.publishImage ?? platform?.publish)
+        : platform?.publish
+      if (platform === undefined || plan === undefined) {
         this.tasks.update(taskId, { status: 'failed', step: 'no-plan', message: '平台未配置发布流程' })
         return
       }
-      const plan = platform.publish
+      const publishUrl = isImage && platform.publishImageUrl !== undefined ? platform.publishImageUrl : platform.publishUrl!
 
       this.tasks.update(taskId, { status: 'uploading', step: 'open-page' })
-      const page = await this.browser.openPage(task.platform, platform.publishUrl!)
+      const page = await this.browser.openPage(task.platform, publishUrl)
       await page.waitForLoadState('domcontentloaded', { timeout: 60_000 }).catch(() => {})
 
       // 登录反证:出现登录表单 → 失败,提示先登录
@@ -68,8 +72,16 @@ export class PublishService {
         }
       }
 
-      // 1) 视频:setInputFiles(平台前端自行上传)
-      if (task.input.videoPath !== undefined && plan.videoInputSelector !== undefined) {
+      // 1) 图片/视频:setInputFiles(平台前端自行上传)
+      if (isImage && plan.imageInputSelector !== undefined) {
+        this.tasks.update(taskId, { status: 'uploading', step: 'images' })
+        const input = page.locator(plan.imageInputSelector).first()
+        await input.waitFor({ state: 'attached', timeout: 30_000 })
+        await input.setInputFiles(task.input.imagePaths!)
+        if (plan.titleInputSelector !== undefined) {
+          await page.locator(plan.titleInputSelector).first().waitFor({ state: 'visible', timeout: 300_000 }).catch(() => {})
+        }
+      } else if (task.input.videoPath !== undefined && plan.videoInputSelector !== undefined) {
         this.tasks.update(taskId, { status: 'uploading', step: 'video' })
         const input = page.locator(plan.videoInputSelector).first()
         await input.waitFor({ state: 'attached', timeout: 30_000 })
@@ -90,13 +102,18 @@ export class PublishService {
         await page.keyboard.type(title, { delay: 30 })
       }
 
-      // 3) 简介/正文
-      if (task.input.description !== undefined && task.input.description !== '' && plan.descInputSelector !== undefined) {
+      // 3) 简介/正文(抖音:话题以 #tag 形式拼接进正文)
+      let description = task.input.description ?? ''
+      if (task.input.tags !== undefined && task.input.tags.length > 0) {
+        const tagText = task.input.tags.map((tag) => `#${tag}`).join(' ')
+        description = description === '' ? tagText : `${description}\n\n${tagText}`
+      }
+      if (description !== '' && plan.descInputSelector !== undefined) {
         this.tasks.update(taskId, { status: 'uploading', step: 'description' })
         const descBox = page.locator(plan.descInputSelector).first()
         await descBox.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {})
         await descBox.click({ timeout: 15_000 }).catch(() => {})
-        await page.keyboard.type(task.input.description, { delay: 10 })
+        await page.keyboard.type(description, { delay: 10 })
       }
 
       // 4) 发布:按文本依次尝试

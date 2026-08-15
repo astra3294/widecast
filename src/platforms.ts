@@ -13,6 +13,8 @@ export interface PlatformDef {
   homeUrl: string
   /** 发布页(视频/图文入口) */
   publishUrl?: string
+  /** 图文模式发布页(如有独立入口) */
+  publishImageUrl?: string
   /** 判定"已登录"的 URL 特征片段 */
   loggedInUrlPatterns: string[]
   /** 判定"在登录页"的 URL 特征片段 */
@@ -25,6 +27,8 @@ export interface PlatformDef {
   probe?: LoginProbe
   /** 发布流程配置(选择器学习自蚁小二 RPA 模板) */
   publish?: PublishPlan
+  /** 图文模式发布流程配置(独立于视频) */
+  publishImage?: PublishPlan
 }
 
 export interface LoginProbe {
@@ -44,6 +48,8 @@ export interface LoginProbe {
 export interface PublishPlan {
   /** 视频文件 input 选择器(setInputFiles 目标) */
   videoInputSelector?: string
+  /** 图片文件 input 选择器(图文模式,支持 multiple) */
+  imageInputSelector?: string
   /** 标题输入框选择器 */
   titleInputSelector?: string
   /** 简介/正文编辑区选择器 */
@@ -97,6 +103,16 @@ export const PLATFORMS: readonly PlatformDef[] = [
       publishButtonTexts: ['发布', '发表', '发 布', '立即投稿'],
       successTexts: ['发布成功', '已发布', '审核中', '作品已提交'],
       titleMaxLength: 29,
+    },
+    // 图文模式(蚁小二 imageTextStart:default-tab=3 + douyinImageRun 选择器)
+    publishImageUrl: 'https://creator.douyin.com/creator-micro/content/upload?default-tab=3',
+    publishImage: {
+      imageInputSelector: '.semi-tabs-pane-motion-overlay input[accept="image/png,image/jpeg,image/jpg,image/bmp,image/webp,image/tif"][multiple]',
+      titleInputSelector: '.semi-input-wrapper input[placeholder="添加作品标题"]',
+      descInputSelector: '.editor.editor-comp-publish',
+      publishButtonTexts: ['发布', '发表', '发 布'],
+      successTexts: ['发布成功', '已发布', '审核中', '作品已提交'],
+      titleMaxLength: 30,
     },
   },
   {
