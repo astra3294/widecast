@@ -18,7 +18,7 @@ export interface ProfileState {
 
 export class BrowserManager {
   private readonly contexts = new Map<string, BrowserContext>()
-  private readonly profilesDir: string
+  readonly profilesDir: string
 
   constructor(baseDir: string) {
     this.profilesDir = join(baseDir, 'browser-profiles')

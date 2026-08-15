@@ -116,6 +116,10 @@ export function apply(ctx: HostContext): void {
                 const platform = typeof payload.platform === 'string' ? payload.platform : ''
                 return { ok: true, value: service.removeAccount(platform) }
               }
+              case 'accounts.logout': {
+                const platform = typeof payload.platform === 'string' ? payload.platform : ''
+                return { ok: true, value: await service.logoutAccount(platform) }
+              }
               case 'publish.list':
                 return { ok: true, value: { tasks: publishService.listTasks() } }
               case 'publish.start': {

@@ -290,6 +290,20 @@ export class WidecastService {
       : { ok: false, message: `没有 ${platformId} 的账号记录` }
   }
 
+  /** 彻底登出:关闭档案并删除本地登录数据(换账号用)。 */
+  async logoutAccount(platformId: string): Promise<{ ok: boolean; message: string }> {
+    await this.browser.closePlatform(platformId)
+    this.accounts.remove(platformId)
+    try {
+      const { rmSync } = await import('node:fs')
+      const { join } = await import('node:path')
+      rmSync(join(this.browser.profilesDir, platformId), { recursive: true, force: true })
+      return { ok: true, message: `${platformId} 已登出,本地登录数据已清除` }
+    } catch (error) {
+      return { ok: false, message: `清除失败:${String(error)}` }
+    }
+  }
+
   dispose(): void {
     void this.browser.closeAll()
   }
