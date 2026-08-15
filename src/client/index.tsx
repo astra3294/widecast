@@ -288,7 +288,8 @@ function TabBar({ snapshot, controller, t }: SharedProps & { snapshot: WidecastS
 }
 
 function AccountsTab({ snapshot, controller, t }: SharedProps & { snapshot: WidecastSnapshot }): ReactNode {
-  const added = new Set(snapshot.accounts.map((item) => item.platform))
+  // 只有"在线"的平台视为已添加;失效/未知的平台仍显示登录按钮(可重登)
+  const added = new Set(snapshot.accounts.filter((item) => item.status === 'ok').map((item) => item.platform))
   const addable = snapshot.platforms.filter((platform) => !added.has(platform.id))
   return (
     <div className="widecastAccounts">
