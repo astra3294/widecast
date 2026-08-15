@@ -29,8 +29,10 @@ export class BrowserManager {
   async contextFor(platform: string): Promise<BrowserContext> {
     const existing = this.contexts.get(platform)
     if (existing !== undefined) return existing
+    // 默认无头后台运行(不挡用户屏幕);设 WIDECAST_HEADED=1 可调试时可见
+    const headed = process.env.WIDECAST_HEADED === '1'
     const context = await chromium.launchPersistentContext(join(this.profilesDir, platform), {
-      headless: false,
+      headless: !headed,
       viewport: { width: 1280, height: 860 },
       locale: 'zh-CN',
     })

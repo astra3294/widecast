@@ -116,8 +116,9 @@ export class PublishService {
         await page.keyboard.type(description, { delay: 10 })
       }
 
-      // 4) 发布:按文本依次尝试
+      // 4) 发布:先快照编辑器 DOM(失败时留证),再按文本依次尝试
       this.tasks.update(taskId, { status: 'publishing', step: 'submit' })
+      const editorDump = await dumpEditorState(page)
       let clicked = false
       for (const text of plan.publishButtonTexts) {
         const button = page.locator(`button:has-text("${text}")`).first()
@@ -128,7 +129,7 @@ export class PublishService {
         }
       }
       if (!clicked) {
-        this.tasks.update(taskId, { status: 'failed', step: 'submit', message: '未找到发布按钮' })
+        this.tasks.update(taskId, { status: 'failed', step: 'submit', message: `未找到发布按钮 | editor:${JSON.stringify(editorDump).slice(0, 1800)}` })
         return
       }
 
@@ -164,7 +165,7 @@ export class PublishService {
           this.tasks.update(taskId, { status: 'done', step: 'verified', message: '平台侧确认:作品已出现在内容管理列表' })
           return
         }
-        this.tasks.update(taskId, { status: 'failed', step: 'verify', message: '已点击发布但内容管理列表未出现该作品(可能被拦截/需人工确认),请查看浏览器窗口' })
+        this.tasks.update(taskId, { status: 'failed', step: 'verify', message: `已点击发布但内容管理列表未出现该作品(可能被拦截/需人工确认),请查看浏览器窗口 | editor:${JSON.stringify(editorDump).slice(0, 1800)}` })
         return
       }
 
@@ -193,4 +194,44 @@ export function validatePublishInput(input: PublishInput): string | null {
   if (input.videoPath !== undefined && !existsSync(input.videoPath)) return `视频文件不存在:${input.videoPath}`
   if (input.videoPath !== undefined && existsSync(input.videoPath) && dirname(input.videoPath) === '') return null
   return null
+}
+
+/** 快照当前编辑器页面的可见输入控件与按钮(定位选择器用)。 */
+async function dumpEditorState(page: import('playwright').Page): Promise<unknown> {
+  return page.evaluate(() => {
+    const visible = (el: Element): boolean => {
+      const rect = el.getBoundingClientRect()
+      const style = getComputedStyle(el)
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
+    }
+    const inputs = [...document.querySelectorAll('input, textarea')]
+      .filter(visible)
+      .map((el) => ({
+        t: el.tagName,
+        ty: el.getAttribute('type') ?? '',
+        ph: el.getAttribute('placeholder') ?? '',
+        dis: (el as HTMLInputElement).disabled === true,
+        cls: String(el.className ?? '').slice(0, 60),
+      }))
+      .slice(0, 25)
+    const editables = [...document.querySelectorAll('[contenteditable="true"]')]
+      .filter(visible)
+      .map((el) => ({
+        ph: el.getAttribute('placeholder') ?? el.getAttribute('data-placeholder') ?? '',
+        aria: el.getAttribute('aria-label') ?? '',
+        cls: String(el.className ?? '').slice(0, 60),
+        text: (el.textContent ?? '').slice(0, 30),
+      }))
+      .slice(0, 15)
+    const buttons = [...document.querySelectorAll('button, [role="button"]')]
+      .filter(visible)
+      .map((el) => ({
+        tx: (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 24),
+        dis: (el as HTMLButtonElement).disabled === true,
+        cls: String(el.className ?? '').slice(0, 60),
+      }))
+      .filter((button) => button.tx !== '')
+      .slice(0, 30)
+    return { url: location.href, inputs, editables, buttons }
+  })
 }

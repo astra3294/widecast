@@ -79,6 +79,7 @@ interface WidecastSnapshot {
   readonly platforms: readonly PlatformView[]
   readonly tasks: readonly TaskView[]
   readonly hint?: string
+  readonly qr?: string
   readonly error?: string
 }
 
@@ -154,21 +155,21 @@ class WidecastController {
 
   /** 面板侧添加账号:立即返回登录引导,随后轮询登录探测直至成功或超时。 */
   async addAccount(platform: string): Promise<void> {
-    this.patch({ busy: true, hint: undefined, error: undefined })
+    this.patch({ busy: true, hint: undefined, qr: undefined, error: undefined })
     try {
-      const result = await this.call<{ message?: string; status?: string }>('accounts.add', { platform, waitMs: 0 })
+      const result = await this.call<{ message?: string; status?: string; qrCodeImage?: string }>('accounts.add', { platform, waitMs: 0 })
       if (result.status === 'ok') {
         await this.loadAccounts()
         this.patch({ busy: false, hint: result.message ?? '登录成功,账号已保存' })
         return
       }
-      this.patch({ hint: result.message ?? '请在打开的浏览器窗口完成登录' })
+      this.patch({ hint: result.message ?? '请扫码登录', qr: result.qrCodeImage })
       for (let attempt = 0; attempt < 60; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 3000))
         const check = await this.call<{ loggedIn: boolean }>('accounts.check', { platform })
         if (check.loggedIn) {
           await this.loadAccounts()
-          this.patch({ busy: false, hint: '登录成功,账号已保存' })
+          this.patch({ busy: false, qr: undefined, hint: '登录成功,账号已保存' })
           return
         }
       }
@@ -291,7 +292,10 @@ function AccountsTab({ snapshot, controller, t }: SharedProps & { snapshot: Wide
   const addable = snapshot.platforms.filter((platform) => !added.has(platform.id))
   return (
     <div className="widecastAccounts">
-      {snapshot.hint !== undefined ? <div className="widecastHint" role="status">{snapshot.hint}</div> : null}
+      {snapshot.hint !== undefined ? <div className="widecastHint" role="status">
+        {snapshot.hint}
+        {snapshot.qr !== undefined ? <img className="widecastQr" src={snapshot.qr} alt="登录二维码" /> : null}
+      </div> : null}
       <div className="widecastActions">
         <Button variant="ghost" size="sm" disabled={snapshot.busy} onClick={() => { void controller.checkAll() }}>
           {t('account.checkAll')}

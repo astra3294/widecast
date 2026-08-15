@@ -34,6 +34,7 @@ const CSS = `
 .widecastTab[data-active=true]{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-button-ghost-active-fill);font-weight:500}
 
 .widecastHint{margin:0 0 10px;padding:8px 12px;border-radius:8px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-button-ghost-active-fill)}
+.widecastQr{display:block;margin:10px auto 0;width:180px;height:180px;border-radius:8px;background:#fff;padding:6px}
 .widecastActions{display:flex;justify-content:flex-end;margin-bottom:10px}
 .widecastGroupTitle{margin:16px 0 8px;font-size:14px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary)}
 

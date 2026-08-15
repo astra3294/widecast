@@ -172,11 +172,12 @@ export class WidecastService {
       return save(`${platform.name} 已登录并保存`)
     }
 
-    await this.browser.openPage(platformId, platform.loginUrl)
+    const loginPage = await this.browser.openPage(platformId, platform.loginUrl)
+    const qrCodeImage = await captureQr(loginPage)
 
     const waitMs = options.waitMs ?? 0
     if (waitMs <= 0) {
-      return { ok: true, needsHuman: true, platform: platformId, status: 'timeout', message: `已打开 ${platform.name} 登录页,请在浏览器窗口完成登录(扫码)` }
+      return { ok: true, needsHuman: true, platform: platformId, status: 'timeout', qrCodeImage, message: `${platform.name} 需要登录:请在下方扫码(手机完成)` }
     }
 
     const signal = options.signal
@@ -190,7 +191,7 @@ export class WidecastService {
       }
       await sleep(2000, signal)
     }
-    return { ok: true, needsHuman: true, platform: platformId, status: 'timeout', message: `等待 ${platform.name} 登录超时;完成登录后再试` }
+    return { ok: true, needsHuman: true, platform: platformId, status: 'timeout', qrCodeImage, message: `等待 ${platform.name} 登录超时;完成登录后再试` }
   }
 
   /** 健康检查:完整探测登录态并更新记录。 */
@@ -278,4 +279,30 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }
     signal?.addEventListener('abort', onAbort, { once: true })
   })
+}
+
+/** 截取登录页二维码(优先 qr 相关元素,兜底全视口),返回 data URL。 */
+async function captureQr(page: import('playwright').Page): Promise<string | undefined> {
+  try {
+    await sleep(2500)
+    const handle = await page.evaluateHandle(() => {
+      const els = [...document.querySelectorAll('img, canvas')].filter((el) => {
+        const rect = el.getBoundingClientRect()
+        return rect.width >= 100 && rect.height >= 100 && rect.width <= 640
+      })
+      if (els.length === 0) return null
+      const qr = els.find((el) => (el.getAttribute('src') ?? '').includes('qr'))
+        ?? els.sort((a, b) => b.getBoundingClientRect().width * b.getBoundingClientRect().height - a.getBoundingClientRect().width * a.getBoundingClientRect().height)[0]
+      return qr ?? null
+    })
+    const element = handle.asElement()
+    if (element !== null) {
+      const buffer = await element.screenshot({ type: 'png', timeout: 10_000 }).catch(() => undefined)
+      if (buffer !== undefined) return `data:image/png;base64,${buffer.toString('base64')}`
+    }
+    const viewport = await page.screenshot({ type: 'png', timeout: 10_000 }).catch(() => undefined)
+    return viewport !== undefined ? `data:image/png;base64,${viewport.toString('base64')}` : undefined
+  } catch {
+    return undefined
+  }
 }
