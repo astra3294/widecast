@@ -313,22 +313,28 @@ export class WidecastService {
     try {
       const page = await this.browser.openPage(platformId, platform.manageUrl)
       await page.waitForLoadState('domcontentloaded', { timeout: 45_000 }).catch(() => {})
-      await sleep(5000)
-      // 在含标题的作品卡片内点击「删除作品」
+      // 等列表加载完(「加载中」消失,最多 25 秒)
+      for (let i = 0; i < 25; i += 1) {
+        const loading = await page.evaluate(() => document.body.innerText.includes('加载中')).catch(() => true)
+        if (!loading) break
+        await sleep(1000)
+      }
+      // 先找标题叶子元素,再按"同一卡片行带(y 中心接近)"定位删除按钮(门户/深层结构都能命中)
       const clicked = await page.evaluate((key: string) => {
+        const leaves = [...document.querySelectorAll('*')]
+          .filter((el) => el.children.length === 0 && (el.textContent ?? '').trim() !== '' && (el.textContent ?? '').includes(key))
+        if (leaves.length === 0) return false
+        const titleEl = leaves.sort((a, b) => (a.textContent ?? '').length - (b.textContent ?? '').length)[0]!
+        const rect = titleEl.getBoundingClientRect()
+        const targetY = rect.top + rect.height / 2
         const buttons = [...document.querySelectorAll('button, [role="button"]')]
           .filter((el) => (el.textContent ?? '').trim() === '删除作品')
-        for (const button of buttons) {
-          let node: Element | null = button
-          for (let i = 0; i < 8 && node !== null; i += 1) {
-            node = node.parentElement
-            if (node !== null && (node as HTMLElement).innerText.includes(key)) {
-              ;(button as HTMLButtonElement).click()
-              return true
-            }
-          }
-        }
-        return false
+        const button = buttons
+          .map((el) => ({ el, r: el.getBoundingClientRect() }))
+          .sort((a, b) => Math.abs(a.r.top + a.r.height / 2 - targetY) - Math.abs(b.r.top + b.r.height / 2 - targetY))[0]
+        if (button === undefined || Math.abs(button.r.top + button.r.height / 2 - targetY) > 200) return false
+        ;(button.el as HTMLButtonElement).click()
+        return true
       }, titleKey)
       if (!clicked) return { ok: false, message: `未找到标题含「${titleKey}」的作品` }
       await sleep(2000)

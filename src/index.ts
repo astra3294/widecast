@@ -203,6 +203,56 @@ export function apply(ctx: HostContext): void {
                 await page.screenshot({ path: file, type: 'png', fullPage: false })
                 return { ok: true, value: { path: file } }
               }
+              case 'debug.click': {
+                const platform = typeof payload.platform === 'string' ? payload.platform : ''
+                const url = typeof payload.url === 'string' && payload.url !== '' ? payload.url : undefined
+                const text = typeof payload.text === 'string' ? payload.text : ''
+                if (platform === '' || text === '') {
+                  return { ok: false, error: { code: 'bad-request', message: 'platform 与 text 必填', details: { issues: [] } } }
+                }
+                const page = url !== undefined
+                  ? await service.browser.openPage(platform, url)
+                  : service.browser.contextFor(platform).then((context) => context.pages()[context.pages().length - 1] ?? Promise.reject(new Error('无页面')))
+                await page.waitForLoadState('domcontentloaded', { timeout: 45_000 }).catch(() => {})
+                await new Promise((resolve) => setTimeout(resolve, 3000))
+                let clicked = false
+                const exact = page.getByRole('button', { name: text, exact: true })
+                if (await exact.count() > 0 && await exact.first().isVisible().catch(() => false)) {
+                  await exact.first().click({ timeout: 10_000 }).catch(() => {})
+                  clicked = true
+                } else {
+                  const sub = page.locator(`button:has-text("${text}"), [role="button"]:has-text("${text}")`).first()
+                  if (await sub.count() > 0 && await sub.isVisible().catch(() => false)) {
+                    await sub.click({ timeout: 10_000 }).catch(() => {})
+                    clicked = true
+                  }
+                }
+                await new Promise((resolve) => setTimeout(resolve, 3500))
+                const state = await page.evaluate(() => {
+                  const visible = (el: Element): boolean => {
+                    const rect = el.getBoundingClientRect()
+                    const style = getComputedStyle(el)
+                    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
+                  }
+                  const inputs = [...document.querySelectorAll('input, textarea, [contenteditable="true"]')]
+                    .filter(visible)
+                    .map((el) => ({
+                      t: el.tagName,
+                      ty: el.getAttribute('type') ?? '',
+                      ph: el.getAttribute('placeholder') ?? '',
+                      dis: (el as HTMLInputElement).disabled === true,
+                      cls: String(el.className ?? '').slice(0, 70),
+                    }))
+                    .slice(0, 40)
+                  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+                    .filter(visible)
+                    .map((el) => ({ tx: (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 26), dis: (el as HTMLButtonElement).disabled === true }))
+                    .filter((button) => button.tx !== '')
+                    .slice(0, 40)
+                  return { url: location.href, inputs, buttons, bodyText: document.body.innerText.slice(0, 600) }
+                })
+                return { ok: true, value: { clicked, page: state } }
+              }
               default:
                 return {
                   ok: false,
