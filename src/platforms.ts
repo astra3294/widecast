@@ -70,6 +70,8 @@ export interface PublishPlan {
   successTexts: string[]
   /** 标题最大长度(超出截断) */
   titleMaxLength?: number
+  /** 话题最大数量(超出部分转为纯文本,不带 #) */
+  maxTopics?: number
 }
 
 export const PLATFORMS: readonly PlatformDef[] = [
@@ -129,6 +131,7 @@ export const PLATFORMS: readonly PlatformDef[] = [
       confirmButtonTexts: ['确认发布', '确定', '知道了', '继续发布', '立即发布'],
       successTexts: ['发布成功', '已发布', '审核中', '作品已提交'],
       titleMaxLength: 30,
+      maxTopics: 5,
     },
   },
   {

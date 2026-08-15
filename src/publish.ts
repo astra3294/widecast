@@ -110,10 +110,13 @@ export class PublishService {
         await page.keyboard.type(title, { delay: 30 })
       }
 
-      // 3) 简介/正文(抖音:话题以 #tag 形式拼接进正文)
+      // 3) 简介/正文(话题规则学习自蚁小二图文模板:最多 N 个带 #,超出转纯文本)
       let description = task.input.description ?? ''
       if (task.input.tags !== undefined && task.input.tags.length > 0) {
-        const tagText = task.input.tags.map((tag) => `#${tag}`).join(' ')
+        const maxTopics = plan.maxTopics ?? task.input.tags.length
+        const tagText = task.input.tags
+          .map((tag, index) => (index < maxTopics ? `#${tag}` : tag))
+          .join(' ')
         description = description === '' ? tagText : `${description}\n\n${tagText}`
       }
       if (description !== '' && plan.descInputSelector !== undefined) {
