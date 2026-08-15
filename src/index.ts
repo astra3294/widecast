@@ -210,9 +210,15 @@ export function apply(ctx: HostContext): void {
                 if (platform === '' || text === '') {
                   return { ok: false, error: { code: 'bad-request', message: 'platform 与 text 必填', details: { issues: [] } } }
                 }
-                const page = url !== undefined
-                  ? await service.browser.openPage(platform, url)
-                  : service.browser.contextFor(platform).then((context) => context.pages()[context.pages().length - 1] ?? Promise.reject(new Error('无页面')))
+                let page: import('playwright').Page
+                if (url !== undefined) {
+                  page = await service.browser.openPage(platform, url)
+                } else {
+                  const context = await service.browser.contextFor(platform)
+                  const last = context.pages()[context.pages().length - 1]
+                  if (last === undefined) return { ok: false, error: { code: 'internal', message: '无页面', details: {} } }
+                  page = last
+                }
                 await page.waitForLoadState('domcontentloaded', { timeout: 45_000 }).catch(() => {})
                 await new Promise((resolve) => setTimeout(resolve, 3000))
                 let clicked = false
