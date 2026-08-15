@@ -161,6 +161,10 @@ export class PublishService {
         }
       }
 
+      // 5.5) 点击后快照:记录点击「发布」后页面的真实反应(弹窗/提示/跳转)
+      await page.waitForTimeout(3000)
+      const postClickDump = await dumpEditorState(page)
+
       // 6) 平台侧确认:打开内容管理页,作品列表出现标题才算发布成功
       this.tasks.update(taskId, { status: 'publishing', step: 'verify' })
       const manageUrl = platform.manageUrl
@@ -173,7 +177,7 @@ export class PublishService {
           this.tasks.update(taskId, { status: 'done', step: 'verified', message: '平台侧确认:作品已出现在内容管理列表' })
           return
         }
-        this.tasks.update(taskId, { status: 'failed', step: 'verify', message: `已点击发布但内容管理列表未出现该作品(可能被拦截/需人工确认),请查看浏览器窗口 | editor:${JSON.stringify(editorDump).slice(0, 1800)}` })
+        this.tasks.update(taskId, { status: 'failed', step: 'verify', message: `已点击发布但内容管理列表未出现该作品 | postClick:${JSON.stringify(postClickDump).slice(0, 1600)} | editor:${JSON.stringify(editorDump).slice(0, 900)}` })
         return
       }
 
@@ -218,6 +222,7 @@ async function dumpEditorState(page: import('playwright').Page): Promise<unknown
         t: el.tagName,
         ty: el.getAttribute('type') ?? '',
         ph: el.getAttribute('placeholder') ?? '',
+        val: (el as HTMLInputElement).value?.slice(0, 30) ?? '',
         dis: (el as HTMLInputElement).disabled === true,
         cls: String(el.className ?? '').slice(0, 60),
       }))
