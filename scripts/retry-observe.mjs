@@ -14,6 +14,15 @@ async function rpc(endpoint, body) {
   return res.json()
 }
 
+// 等宿主上线(重启后场景)
+const hostDeadline = Date.now() + 120000
+while (Date.now() < hostDeadline) {
+  try {
+    await rpc('ping', { type: 'client-request', rpcId: 'ro-ping', method: 'ping', payload: {} })
+    break
+  } catch { await sleep(3000) }
+}
+
 const start = await rpc('publish.start', {
   type: 'client-request', rpcId: 'ro-start', method: 'publish.start',
   payload: { platform: 'douyin', input: payload },
