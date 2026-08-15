@@ -14,6 +14,8 @@ export interface AddAccountResult {
   platform: string
   status: 'ok' | 'timeout' | 'cancelled'
   message: string
+  /** 登录二维码截图(data URL),面板内展示供手机扫码 */
+  qrCodeImage?: string
 }
 
 export interface AccountView {
