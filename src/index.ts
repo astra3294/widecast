@@ -104,6 +104,8 @@ export function apply(ctx: HostContext): void {
                 return { ok: true, value: await service.addAccount(platform, { waitMs, signal }) }
               }
               case 'accounts.check': {
+                const platform = typeof payload.platform === 'string' ? payload.platform : ''
+                if (platform !== '') return { ok: true, value: await service.checkPlatform(platform) }
                 return { ok: true, value: { accounts: await service.checkAllAccounts() } }
               }
               case 'accounts.remove': {

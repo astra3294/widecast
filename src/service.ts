@@ -134,6 +134,39 @@ export class WidecastService {
     return this.listAccounts()
   }
 
+  /**
+   * 单平台登录探测(登录引导流程用):无论有无记录都检测;
+   * 已登录则创建/更新账号记录并返回 loggedIn=true。
+   */
+  async checkPlatform(platformId: string): Promise<{ loggedIn: boolean; account?: AccountView; message?: string }> {
+    const platform = findPlatform(platformId)
+    if (platform === undefined) return { loggedIn: false, message: `未知平台:${platformId}` }
+    try {
+      const page = await this.browser.openPage(platformId, platform.homeUrl)
+      await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {})
+      await sleep(1500)
+      const state = detectLoginState(platform, page.url())
+      if (state === 'logged-in') {
+        const existing = this.accounts.get(platformId)
+        const record: AccountRecord = {
+          platform: platformId,
+          name: existing?.name ?? platform.name,
+          addedAt: existing?.addedAt ?? Date.now(),
+          lastCheckedAt: Date.now(),
+          status: 'ok',
+        }
+        this.accounts.upsert(record)
+        return {
+          loggedIn: true,
+          account: { platform: platformId, name: record.name, status: 'ok', addedAt: record.addedAt, lastCheckedAt: record.lastCheckedAt },
+        }
+      }
+      return { loggedIn: false, message: state === 'login-page' ? '登录页(尚未登录)' : '登录态无法判定' }
+    } catch (error) {
+      return { loggedIn: false, message: String(error) }
+    }
+  }
+
   removeAccount(platformId: string): { ok: boolean; message: string } {
     const removed = this.accounts.remove(platformId)
     void this.browser.closePlatform(platformId)
