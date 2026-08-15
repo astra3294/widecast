@@ -127,16 +127,28 @@ export class PublishService {
         await page.keyboard.type(description, { delay: 10 })
       }
 
-      // 4) 发布:先快照编辑器 DOM(失败时留证),再按文本依次尝试
+      // 4) 发布:先快照编辑器 DOM(失败时留证),再按精确文本点按钮
+      //    (必须精确匹配:「发布」≠「作品发布」导航,子串匹配会点错)
       this.tasks.update(taskId, { status: 'publishing', step: 'submit' })
       const editorDump = await dumpEditorState(page)
       let clicked = false
       for (const text of plan.publishButtonTexts) {
-        const button = page.locator(`button:has-text("${text}")`).first()
-        if (await button.count() > 0 && await button.isVisible().catch(() => false)) {
-          await button.click({ timeout: 15_000 }).catch(() => {})
+        const exact = page.getByRole('button', { name: text, exact: true })
+        if (await exact.count() > 0 && await exact.first().isVisible().catch(() => false)) {
+          await exact.first().click({ timeout: 15_000 }).catch(() => {})
           clicked = true
           break
+        }
+      }
+      if (!clicked) {
+        // 兜底:子串匹配(旧行为)
+        for (const text of plan.publishButtonTexts) {
+          const button = page.locator(`button:has-text("${text}")`).first()
+          if (await button.count() > 0 && await button.isVisible().catch(() => false)) {
+            await button.click({ timeout: 15_000 }).catch(() => {})
+            clicked = true
+            break
+          }
         }
       }
       if (!clicked) {
@@ -144,7 +156,7 @@ export class PublishService {
         return
       }
 
-      // 5) 处理可能出现的确认弹窗(按文本点击确认按钮,最多 30 秒)
+      // 5) 处理可能出现的确认弹窗(精确文本点击确认按钮,最多 30 秒)
       this.tasks.update(taskId, { status: 'publishing', step: 'confirm-dialog' })
       const confirmTexts = plan.confirmButtonTexts ?? []
       if (confirmTexts.length > 0) {
@@ -152,9 +164,9 @@ export class PublishService {
         while (Date.now() < dialogDeadline) {
           let clickedConfirm = false
           for (const text of confirmTexts) {
-            const button = page.locator(`button:has-text("${text}")`).first()
-            if (await button.count() > 0 && await button.isVisible().catch(() => false)) {
-              await button.click({ timeout: 10_000 }).catch(() => {})
+            const exact = page.getByRole('button', { name: text, exact: true })
+            if (await exact.count() > 0 && await exact.first().isVisible().catch(() => false)) {
+              await exact.first().click({ timeout: 10_000 }).catch(() => {})
               clickedConfirm = true
               break
             }
