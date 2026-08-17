@@ -70,6 +70,7 @@
     "build:types": "tsc -p tsconfig.build.json",
     "build": "pnpm clean && pnpm build:types && tsdown",
     "watch": "tsdown --watch",
+    "test": "vitest run",
     "check": "pnpm typecheck && pnpm build"
   },
   "peerDependencies": {
@@ -88,7 +89,8 @@
     "@types/react": "^18.3.20",
     "react": "^18.3.1",
     "tsdown": "^0.16.5",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   },
   "publishConfig": {
     "access": "public",

@@ -17,6 +17,8 @@ import { findPlatform, hasCapability, type PlatformDef, type PublishPlan } from 
 import { detectLoggedIn } from './service.js'
 import { TaskStore, type PublishInput, type PublishTask, type PublishReceipt } from './tasks.js'
 
+export type { PublishInput, PublishTask, PublishReceipt }
+
 // ─── 发布服务 ────────────────────────────────────────────────────────────────
 
 export class PublishService {
@@ -282,6 +284,9 @@ export class PublishService {
     const titleBox = page.locator(plan.titleInputSelector).first()
     await titleBox.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {})
     await titleBox.click({ timeout: 15_000 }).catch(() => {})
+    // 全选后输入，清除平台可能自动填充的默认标题（蚁小二 onSendInput 同款思路）
+    await page.keyboard.press('Control+A')
+    await page.keyboard.press('Backspace')
     await page.keyboard.type(title, { delay: 30 })
   }
 
@@ -418,20 +423,24 @@ export class PublishService {
   }
 
   /** 检查收集到的网络响应。 */
-  private checkCollectedResponses(collector: PublishResponseCollector, platform: PlatformDef): PublishReceipt | undefined {
-    const responses = collector.getResponses()
+  private async checkCollectedResponses(collector: PublishResponseCollector, platform: PlatformDef): Promise<PublishReceipt | undefined> {
+    const responses = await collector.getResponses()
     for (const resp of responses) {
-      // 检查是否有发布成功的响应
       if (resp.status >= 200 && resp.status < 300) {
-        // 尝试解析 JSON
         try {
           const json = JSON.parse(resp.body) as Record<string, unknown>
-          // 检查常见的成功字段
-          if (json.status === 'success' || json.code === 0 || json.err_no === 0) {
+          // 抖音返回 status_code / err_no；通用检查 code / status
+          const success =
+            json.status_code === 0 ||
+            json.err_no === 0 ||
+            json.code === 0 ||
+            json.status === 'success'
+          if (success) {
             return {
               proofLevel: 'A',
               evidence: ['network-response'],
               submittedAt: new Date().toISOString(),
+              url: resp.url,
               rawResponse: resp.body.slice(0, 2000),
             }
           }
@@ -487,24 +496,32 @@ interface CollectedResponse {
 }
 
 class PublishResponseCollector {
-  private readonly responses: CollectedResponse[] = []
+  private readonly pending = new Map<PwResponse, Promise<string>>()
+  private readonly done: CollectedResponse[] = []
 
   onResponse(response: PwResponse): void {
     try {
       const url = response.url()
-      // 只收集可能相关的响应（排除静态资源）
       if (url.includes('/api/') || url.includes('/publish') || url.includes('/upload') || url.includes('/create')) {
-        response.text().then((body) => {
-          this.responses.push({ url, status: response.status(), body })
-        }).catch(() => {})
+        // 保存 Promise 引用，getResponses() 时 await 全部
+        const bodyPromise = response.text().catch(() => '')
+        this.pending.set(response, bodyPromise)
+        // 清理：完成后从 pending 移到 done
+        void bodyPromise.then((body) => {
+          this.pending.delete(response)
+          this.done.push({ url, status: response.status(), body })
+        })
       }
     } catch {
       // ignore
     }
   }
 
-  getResponses(): CollectedResponse[] {
-    return [...this.responses]
+  /** 等待所有已收集响应的 body 读取完成后再返回。 */
+  async getResponses(): Promise<CollectedResponse[]> {
+    // 等所有 pending 的 body 读完
+    await Promise.all([...this.pending.values()])
+    return [...this.done]
   }
 }
 
