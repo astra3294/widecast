@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-08-20
+
+### 🎉 抖音端到端发布成功
+
+首次在真实抖音页面完成完整的视频发布闭环：
+
+```
+状态: done (verified)
+凭证等级: B (success-toast)
+证据: 检测到成功提示：发布成功
+```
+
+### Added
+- **浏览器反检测**：`--disable-blink-features=AutomationControlled` + `ignoreDefaultArgs: ['--enable-automation']`
+- **抖音 `__name` 冲突修复**：`fixNameConflict()` 通过 CDP 在页面加载后覆盖安全 SDK 的 `__name` getter
+- **CDP 降级路径**：`cdpSetValue()` 在 Playwright evaluate 失败时通过 CDP 直接操作 DOM
+- **B→A 级凭证升级**：发布成功后自动在内容管理页进一步验证，尝试升级凭证等级
+- **诊断脚本**：`scripts/e2e-douyin.ts`（端到端测试）、`scripts/publish-douyin.ts`（独立发布）、`scripts/publish-douyin-direct.ts`（核心模块直调）
+
+### Fixed
+- **视频上传等待**：先 `waitForLoadState('networkidle')` + 3s 延迟，再三级回退定位
+- **表单填写**：优先 `locator.fill()`，`__name` 冲突时 CDP 降级
+- **dumpEditorState**：加 catch 兜底，不阻断发布流程
+
 ## [0.2.1] - 2026-08-20
 
 ### Fixed

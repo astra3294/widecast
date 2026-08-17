@@ -27,13 +27,14 @@ dsh --profile web
 
 ## 核心能力
 
-### 发布闭环（v0.2.0）
+### 发布闭环（v0.3.0 — 抖音已实测验证）
 
 - **完整状态机**：draft → queued → uploading → publishing → verifying → done / needs_attention / retryable_failed / terminal_failed
 - **幂等防重复**：SHA-256 幂等键（account + platform + content-fingerprint + time-bucket），相同内容不会重复发布
 - **发布凭证（Receipt）**：A/B/C 三级证明（网络响应 / 成功提示 / 内容列表确认），每次发布都有可验证的结果
 - **安全重试**：retryable_failed 和 needs_attention 状态支持手动重试，不会自动重复发布
 - **响应监听**：点击发布前注册响应监听，不立即离开发布页，确保捕获平台返回
+- **抖音反检测**：禁用 AutomationControlled + CDP 修复安全 SDK `__name` 冲突
 
 ### 平台能力分级
 
@@ -41,7 +42,7 @@ dsh --profile web
 
 | 平台 | 登录 | 视频发布 | 图文发布 | 结果验证 |
 |------|------|----------|----------|----------|
-| 抖音 | ✅ | ✅ | ✅ | ✅ |
+| 抖音 | ✅ | ✅ (实测) | ✅ (实测) | ✅ (B级凭证) |
 | 小红书 | ✅ | - | - | - |
 | B站 | ✅ | - | - | - |
 | 快手 | ✅ | - | - | - |

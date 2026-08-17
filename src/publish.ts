@@ -200,20 +200,43 @@ export class PublishService {
 
       // 9) 验证结果
       if (receipt !== undefined) {
-        // 发布成功或需要关注
-        if (receipt.proofLevel === 'A' || receipt.proofLevel === 'B') {
+        if (receipt.proofLevel === 'A') {
+          // A 级凭证：直接确认
           this.tasks.update(taskId, {
             status: 'done',
             step: 'verified',
-            message: '发布成功',
+            message: '发布成功（A级凭证）',
             receipt,
           })
+        } else if (receipt.proofLevel === 'B') {
+          // B 级凭证：尝试在内容管理页进一步验证以升级到 A 级
+          const listReceipt = await this.verifyInContentList(page, platform, task)
+          if (listReceipt !== undefined && listReceipt.proofLevel === 'A') {
+            // 升级为 A 级：合并凭证
+            this.tasks.update(taskId, {
+              status: 'done',
+              step: 'verified',
+              message: '发布成功（A级凭证：内容管理列表确认）',
+              receipt: {
+                ...listReceipt,
+                evidence: [...new Set([...receipt.evidence, ...listReceipt.evidence])],
+              },
+            })
+          } else {
+            // 保持 B 级
+            this.tasks.update(taskId, {
+              status: 'done',
+              step: 'verified',
+              message: '发布成功（B级凭证）',
+              receipt,
+            })
+          }
         } else {
-          // needs_attention：有证据但不确定
+          // C 级或未知：needs_attention
           this.tasks.markNeedsAttention(taskId, '发布结果不确定，请人工确认', receipt)
         }
       } else {
-        // 尝试在新页面验证内容列表
+        // 没有任何凭证：尝试内容管理页验证
         const listReceipt = await this.verifyInContentList(page, platform, task)
         if (listReceipt !== undefined) {
           this.tasks.update(taskId, {
@@ -223,7 +246,6 @@ export class PublishService {
             receipt: listReceipt,
           })
         } else {
-          // 进入 needs_attention，不自动重发
           this.tasks.markNeedsAttention(taskId, '已点击发布但无法确认结果，请人工检查', {
             proofLevel: 'unknown',
             evidence: ['editor-dump'],
@@ -555,16 +577,31 @@ export class PublishService {
     if (titleKey === '') return undefined
 
     try {
+      // 修复 __name 冲突
+      await this.fixNameConflict(page)
+
       // 在新页面打开内容管理页
       const managePage = await this.browser.openPage(task.platform, platform.manageUrl)
       await managePage.waitForLoadState('domcontentloaded', { timeout: 45_000 }).catch(() => {})
-      // 等列表加载完
       await managePage.waitForTimeout(5000)
 
-      const found = await managePage.evaluate(
-        (key: string) => document.body.innerText.includes(key),
-        titleKey,
-      ).catch(() => false)
+      // 用 CDP 获取页面文本，避免 evaluate 的 __name 冲突
+      let found = false
+      try {
+        const cdp = await managePage.context().newCDPSession(managePage)
+        const result = await cdp.send('Runtime.evaluate', {
+          expression: `document.body.innerText.includes('${titleKey.replace(/'/g, "\\'")}')`,
+          returnByValue: true,
+        })
+        found = result.result.value === true
+        await cdp.detach()
+      } catch {
+        // CDP 失败，回退到 evaluate
+        found = await managePage.evaluate(
+          (key: string) => document.body.innerText.includes(key),
+          titleKey,
+        ).catch(() => false)
+      }
 
       if (found) {
         return {
@@ -575,7 +612,7 @@ export class PublishService {
         }
       }
     } catch {
-      // 验证失败，返回 undefined
+      // 验证失败
     }
     return undefined
   }
