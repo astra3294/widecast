@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-08-20
+
+### 🎉 架构升级：Widecast 独立服务模式
+
+**重大改进**：Widecast 从 DSH 插件模式升级为独立服务模式。
+
+**优势**：
+- 代码修改后只需重启 Widecast 服务，不影响 DSH
+- 支持热重载（`pnpm serve:dev`）
+- 独立进程，更稳定
+- DSH 通过 HTTP RPC 调用 Widecast 服务
+
+### Added
+- **Widecast 独立服务**：`src/server.ts` — HTTP/RPC 服务器（端口 18080）
+- **Widecast 客户端**：`src/client.ts` — 通过 HTTP 调用独立服务
+- **自动账号检查**：`widecast_check_account` 工具 — 发布前检查账号状态
+- **服务启动脚本**：`pnpm serve` 和 `pnpm serve:dev`
+
+### Changed
+- **DSH 工具层**：从直接调用模块改为调用独立服务
+- **架构**：从单进程插件模式改为独立服务 + DSH 客户端模式
+
+### Fixed
+- **DSH 热重载问题**：不再依赖 DSH 重启来加载新代码
+- **工具层 lossless JSON 兼容**：独立服务统一处理 JSON 序列化
+
 ## [0.3.2] - 2026-08-20
 
 ### 🎉 抖音发布再次验证成功

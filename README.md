@@ -19,11 +19,31 @@ dsh plugin --profile web add link:E:/自媒体/widecast
 # 在 profile 的 package.json `dsh.profile.bundles` 中加入 "widecast"
 # （widecast 自带的 cordis.patch.yml 会把插件 insert 进 loader）
 
+# 启动 Widecast 独立服务（必须先启动）
+cd E:\自媒体\widecast
+pnpm serve
+
 # 重启 Harness
 dsh --profile web
 ```
 
 重启后刷新页面，左下角设置按钮旁会出现「自媒体」入口。
+
+## 开发模式
+
+```bash
+# 启动 Widecast 独立服务（端口 18080）
+pnpm serve
+
+# 开发模式（自动重载）
+pnpm serve:dev
+
+# 构建
+pnpm check
+
+# 测试
+pnpm test
+```
 
 ## 核心能力
 

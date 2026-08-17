@@ -37,11 +37,32 @@ export class PublishService {
     return this.tasks.get(id)
   }
 
+  /** 发布前自动检查账号状态。 */
+  async prePublishCheck(platformId: string): Promise<{ ok: boolean; loggedIn: boolean; message?: string }> {
+    const platform = findPlatform(platformId)
+    if (platform === undefined) return { ok: false, loggedIn: false, message: `未知平台：${platformId}` }
+
+    try {
+      const loggedIn = await detectLoggedIn(platform, this.browser)
+      return {
+        ok: true,
+        loggedIn,
+        message: loggedIn ? `${platform.name} 账号正常` : `${platform.name} 未登录或登录已失效，请重新登录`,
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        loggedIn: false,
+        message: `检查 ${platform.name} 账号状态失败：${String(error)}`,
+      }
+    }
+  }
+
   /** 启动发布任务（异步执行，立即返回任务）。 */
   start(
     platformId: string,
     input: PublishInput,
-    options: { accountId?: string } = {},
+    options: { accountId?: string; skipPreCheck?: boolean } = {},
   ): { ok: boolean; task?: PublishTask; isDuplicate?: boolean; message?: string } {
     const platform = findPlatform(platformId)
     if (platform === undefined) return { ok: false, message: `未知平台：${platformId}` }

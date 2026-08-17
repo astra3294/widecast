@@ -10,13 +10,9 @@
  *  - 账号凭证本体存于各平台浏览器档案（~/.widecast/browser-profiles/<platform>），
  *    本服务只落盘账号元数据；凭证永不进工具返回体。
  */
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { RPC_CHANNEL, WIDECAST_VERSION } from './constants.js'
-import { PLATFORMS, findPlatform, hasCapability } from './platforms.js'
-import { PublishService } from './publish.js'
-import { WidecastService } from './service.js'
-import { TaskStore } from './tasks.js'
+import { PLATFORMS } from './platforms.js'
+import { WidecastClient } from './client.js'
 
 export const name = 'widecast'
 export const inject = ['connection', 'tools']
@@ -64,36 +60,13 @@ function payloadRecord(payload: unknown): Record<string, unknown> {
   return payload as Record<string, unknown>
 }
 
-function baseDir(): string {
-  const override = process.env.WIDECAST_HOME
-  return override !== undefined && override !== '' ? override : join(homedir(), '.widecast')
-}
-
-/** 递归移除对象中的 undefined 值，确保 JSON 序列化安全。 */
-function removeUndefined(obj: unknown): unknown {
-  if (obj === null || obj === undefined) return obj
-  if (Array.isArray(obj)) return obj.map(removeUndefined)
-  if (typeof obj === 'object') {
-    const result: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-      if (value !== undefined) {
-        result[key] = removeUndefined(value)
-      }
-    }
-    return result
-  }
-  return obj
-}
-
 const PLATFORM_IDS = PLATFORMS.map((platform) => platform.id)
 
 export function apply(ctx: HostContext): void {
-  const service = new WidecastService(baseDir())
-  const tasks = new TaskStore(baseDir())
-  const publishService = new PublishService(service.browser, tasks)
-
-  // 是否为开发模式（可通过环境变量启用 debug 接口）
-  const isDev = process.env.WIDECAST_DEV === '1'
+  // 通过环境变量或默认端口连接 Widecast 服务
+  const widecastPort = process.env.WIDECAST_PORT ?? '18080'
+  const widecastHost = process.env.WIDECAST_HOST ?? '127.0.0.1'
+  const client = new WidecastClient(`http://${widecastHost}:${widecastPort}`)
 
   // ---- 面板 RPC（loopback）----
   ctx.effect(
@@ -103,101 +76,8 @@ export function apply(ctx: HostContext): void {
         async (endpoint, rawPayload, signal) => {
           try {
             const payload = payloadRecord(rawPayload)
-            switch (endpoint) {
-              case 'ping':
-                return { ok: true, value: { pong: true, time: Date.now(), version: WIDECAST_VERSION } }
-              case 'hello':
-                return {
-                  ok: true,
-                  value: {
-                    greeting: 'widecast 已连接',
-                    version: WIDECAST_VERSION,
-                    platforms: PLATFORMS.length,
-                    accounts: service.listAccounts().length,
-                  },
-                }
-              case 'platforms.list': {
-                const platforms = service.listPlatforms()
-                return { ok: true, value: { platforms } }
-              }
-              case 'accounts.list':
-                return { ok: true, value: { accounts: service.listAccounts() } }
-              case 'accounts.add': {
-                const platform = typeof payload.platform === 'string' ? payload.platform : ''
-                const waitMs = typeof payload.waitMs === 'number' ? payload.waitMs : 0
-                return { ok: true, value: await service.addAccount(platform, { waitMs, signal }) }
-              }
-              case 'accounts.check': {
-                const platform = typeof payload.platform === 'string' ? payload.platform : ''
-                if (platform !== '') return { ok: true, value: await service.checkPlatform(platform) }
-                return { ok: true, value: { accounts: await service.checkAllAccounts() } }
-              }
-              case 'accounts.remove': {
-                const platform = typeof payload.platform === 'string' ? payload.platform : ''
-                return { ok: true, value: service.removeAccount(platform) }
-              }
-              case 'accounts.logout': {
-                const platform = typeof payload.platform === 'string' ? payload.platform : ''
-                return { ok: true, value: await service.logoutAccount(platform) }
-              }
-              case 'work.delete': {
-                const platform = typeof payload.platform === 'string' ? payload.platform : ''
-                const titleKey = typeof payload.titleKey === 'string' ? payload.titleKey : ''
-                return { ok: true, value: await service.deleteWork(platform, titleKey) }
-              }
-              case 'publish.list': {
-                const platform = typeof payload.platform === 'string' ? payload.platform : undefined
-                const limit = typeof payload.limit === 'number' ? payload.limit : undefined
-                return { ok: true, value: { tasks: publishService.listTasks({ platform, limit }) } }
-              }
-              case 'publish.start': {
-                const platform = typeof payload.platform === 'string' ? payload.platform : ''
-                const input = (typeof payload.input === 'object' && payload.input !== null && !Array.isArray(payload.input))
-                  ? payload.input as Record<string, unknown>
-                  : {}
-                const normalized = {
-                  title: typeof input.title === 'string' ? input.title : '',
-                  ...(typeof input.description === 'string' ? { description: input.description } : {}),
-                  ...(typeof input.videoPath === 'string' ? { videoPath: input.videoPath } : {}),
-                  ...(typeof input.coverPath === 'string' ? { coverPath: input.coverPath } : {}),
-                  ...(Array.isArray(input.imagePaths) ? { imagePaths: input.imagePaths.filter((x): x is string => typeof x === 'string') } : {}),
-                  ...(Array.isArray(input.tags) ? { tags: input.tags.filter((x): x is string => typeof x === 'string') } : {}),
-                }
-                const accountId = typeof payload.accountId === 'string' ? payload.accountId : undefined
-                return { ok: true, value: publishService.start(platform, normalized, { accountId }) }
-              }
-              case 'publish.status': {
-                const taskId = typeof payload.taskId === 'string' ? payload.taskId : ''
-                return { ok: true, value: { task: publishService.getTask(taskId) } }
-              }
-              case 'publish.retry': {
-                const taskId = typeof payload.taskId === 'string' ? payload.taskId : ''
-                return { ok: true, value: publishService.retry(taskId) }
-              }
-              case 'publish.cancel': {
-                const taskId = typeof payload.taskId === 'string' ? payload.taskId : ''
-                return { ok: true, value: publishService.cancel(taskId) }
-              }
-              case 'publish.stats':
-                return { ok: true, value: tasks.stats() }
-              // Debug 接口：仅在开发模式下可用
-              case 'debug.page':
-              case 'debug.screenshot':
-              case 'debug.click': {
-                if (!isDev) {
-                  return {
-                    ok: false,
-                    error: { code: 'forbidden', message: 'debug 接口仅在开发模式下可用（设置 WIDECAST_DEV=1）', details: {} },
-                  }
-                }
-                return handleDebugEndpoint(endpoint, payload, service)
-              }
-              default:
-                return {
-                  ok: false,
-                  error: { code: 'bad-request', message: `unknown widecast endpoint: ${endpoint}`, details: { issues: [] } },
-                }
-            }
+            const result = await client.call(endpoint, payload)
+            return { ok: true, value: result }
           } catch (error) {
             return { ok: false, error: { code: 'internal', message: String(error), details: {} } }
           }
@@ -208,7 +88,9 @@ export function apply(ctx: HostContext): void {
   )
 
   // 插件卸载时关闭所有浏览器档案
-  ctx.effect(() => () => { void service.dispose() }, 'widecast: dispose browsers')
+  ctx.effect(() => () => {
+    // 客户端模式下不需要关闭浏览器，服务端会处理
+  }, 'widecast: dispose')
 
   // ---- 模型工具 ----
   const renderJson = (_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
@@ -232,7 +114,7 @@ export function apply(ctx: HostContext): void {
       render: renderJson,
     },
     async execute() {
-      return { ok: true, version: WIDECAST_VERSION, message: 'widecast 运行正常' }
+      return client.ping()
     },
   })
 
@@ -266,14 +148,7 @@ export function apply(ctx: HostContext): void {
       render: renderJson,
     },
     async execute() {
-      return removeUndefined({
-        platforms: PLATFORMS.map((p) => ({
-          id: p.id,
-          name: p.name,
-          capabilities: p.capabilities,
-          publishUrl: p.publishUrl,
-        })),
-      })
+      return client.listPlatforms()
     },
   })
 
@@ -297,6 +172,7 @@ export function apply(ctx: HostContext): void {
                 name: { type: 'string' },
                 status: { type: 'string', enum: ['ok', 'expired', 'unknown'] },
                 addedAt: { type: 'number' },
+                lastCheckedAt: { type: 'number' },
                 lastError: { type: 'string' },
               },
               required: ['platform', 'name', 'status'],
@@ -308,8 +184,7 @@ export function apply(ctx: HostContext): void {
       render: renderJson,
     },
     async execute() {
-      const accounts = service.listAccounts()
-      return removeUndefined({ accounts })
+      return client.listAccounts()
     },
   })
 
@@ -345,8 +220,8 @@ export function apply(ctx: HostContext): void {
       render: renderJson,
     },
     timeoutMs: 200_000,
-    async execute(args, exec) {
-      return service.addAccount(String(args.platform), { waitMs: 180_000, signal: exec.signal })
+    async execute(args) {
+      return client.call('accounts.add', { platform: String(args.platform), waitMs: 180_000 })
     },
   })
 
@@ -374,7 +249,38 @@ export function apply(ctx: HostContext): void {
       render: renderJson,
     },
     async execute(args) {
-      return service.removeAccount(String(args.platform))
+      return client.call('accounts.remove', { platform: String(args.platform) })
+    },
+  })
+
+  ctx.tools.register({
+    name: 'widecast_check_account',
+    description:
+      '检查指定平台的账号登录状态。返回是否已登录、是否需要重新登录。在发布前调用此工具可以提前发现账号失效问题。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        platform: { type: 'string', description: '平台 id', enum: PLATFORM_IDS },
+      },
+      required: ['platform'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean' },
+          loggedIn: { type: 'boolean' },
+          platform: { type: 'string' },
+          message: { type: 'string' },
+        },
+        required: ['ok', 'loggedIn', 'platform', 'message'],
+      },
+      render: renderJson,
+    },
+    async execute(args) {
+      return client.checkAccount(String(args.platform))
     },
   })
 
@@ -439,26 +345,7 @@ export function apply(ctx: HostContext): void {
       if (Array.isArray(args.imagePaths)) input.imagePaths = args.imagePaths.map(String)
       if (Array.isArray(args.tags)) input.tags = args.tags.map(String)
       const accountId = typeof args.accountId === 'string' ? args.accountId : undefined
-      const result = publishService.start(String(args.platform), input as never, { accountId })
-      // 只返回 schema 中定义的字段，移除 undefined 值
-      return removeUndefined({
-        ok: result.ok,
-        message: result.message,
-        isDuplicate: result.isDuplicate,
-        task: result.task ? {
-          id: result.task.id,
-          platform: result.task.platform,
-          status: result.task.status,
-          step: result.task.step,
-          message: result.task.message,
-          receipt: result.task.receipt ? {
-            platformPublicationId: result.task.receipt.platformPublicationId,
-            url: result.task.receipt.url,
-            proofLevel: result.task.receipt.proofLevel,
-            evidence: result.task.receipt.evidence,
-          } : undefined,
-        } : undefined,
-      })
+      return client.startPublish(String(args.platform), input, accountId)
     },
   })
 
@@ -509,155 +396,9 @@ export function apply(ctx: HostContext): void {
       render: renderJson,
     },
     async execute(args) {
-      const task = publishService.getTask(String(args.taskId))
-      if (task === undefined) return { task: null }
-      // 只返回 schema 中定义的字段，移除 undefined 值
-      return removeUndefined({
-        task: {
-          id: task.id,
-          platform: task.platform,
-          status: task.status,
-          step: task.step,
-          message: task.message,
-          receipt: task.receipt ? {
-            platformPublicationId: task.receipt.platformPublicationId,
-            url: task.receipt.url,
-            proofLevel: task.receipt.proofLevel,
-            evidence: task.receipt.evidence,
-          } : undefined,
-          retryCount: task.retryCount,
-          createdAt: task.createdAt,
-          updatedAt: task.updatedAt,
-        },
-      })
+      return client.getTaskStatus(String(args.taskId))
     },
   })
-}
-
-/** 处理 debug 接口（仅开发模式）。 */
-async function handleDebugEndpoint(
-  endpoint: string,
-  payload: Record<string, unknown>,
-  service: WidecastService,
-): Promise<RpcResult<unknown>> {
-  const platform = typeof payload.platform === 'string' ? payload.platform : ''
-  if (platform === '') {
-    return { ok: false, error: { code: 'bad-request', message: 'platform 必填', details: { issues: [] } } }
-  }
-
-  switch (endpoint) {
-    case 'debug.page': {
-      const url = typeof payload.url === 'string' && payload.url !== '' ? payload.url : undefined
-      const context = await service.browser.contextFor(platform)
-      const page = url !== undefined
-        ? await service.browser.openPage(platform, url)
-        : context.pages()[context.pages().length - 1]
-      if (page === undefined) return { ok: true, value: { page: null, message: '无页面' } }
-      await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {})
-      await new Promise((resolve) => setTimeout(resolve, 1500))
-      const state = await page.evaluate(() => {
-        const visible = (el: Element): boolean => {
-          const rect = el.getBoundingClientRect()
-          const style = getComputedStyle(el)
-          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
-        }
-        const buttons = [...document.querySelectorAll('button, [role="button"]')]
-          .filter(visible)
-          .map((el) => ({
-            tx: (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 30),
-            dis: (el as HTMLButtonElement).disabled === true,
-          }))
-          .filter((button) => button.tx !== '')
-          .slice(0, 40)
-        const dialogs = [...document.querySelectorAll('[role="dialog"], .semi-modal, .semi-portal')]
-          .filter(visible)
-          .map((el) => (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 300))
-          .filter(Boolean)
-        const inputs = [...document.querySelectorAll('input, textarea, [contenteditable="true"]')]
-          .filter(visible)
-          .map((el) => ({
-            t: el.tagName,
-            ty: el.getAttribute('type') ?? '',
-            ph: el.getAttribute('placeholder') ?? '',
-            dis: (el as HTMLInputElement).disabled === true,
-            cls: String(el.className ?? '').slice(0, 60),
-          }))
-          .slice(0, 30)
-        const bodyText = document.body.innerText.slice(0, 800)
-        return { url: location.href, title: document.title, buttons: [...new Set(buttons.map((b) => JSON.stringify(b)))].map((s) => JSON.parse(s)).slice(0, 40), dialogs: dialogs.slice(0, 6), inputs, bodyText }
-      })
-      return { ok: true, value: { page: state } }
-    }
-    case 'debug.screenshot': {
-      const context = await service.browser.contextFor(platform)
-      const page = context.pages()[context.pages().length - 1]
-      if (page === undefined) return { ok: true, value: { path: null, message: '无页面' } }
-      const { mkdirSync } = await import('node:fs')
-      const { join } = await import('node:path')
-      const debugDir = join(baseDir(), 'debug')
-      mkdirSync(debugDir, { recursive: true })
-      const file = join(debugDir, `${platform}-${Date.now()}.png`)
-      await page.screenshot({ path: file, type: 'png', fullPage: false })
-      return { ok: true, value: { path: file } }
-    }
-    case 'debug.click': {
-      const url = typeof payload.url === 'string' && payload.url !== '' ? payload.url : undefined
-      const text = typeof payload.text === 'string' ? payload.text : ''
-      if (text === '') {
-        return { ok: false, error: { code: 'bad-request', message: 'text 必填', details: { issues: [] } } }
-      }
-      let page: import('playwright').Page
-      if (url !== undefined) {
-        page = await service.browser.openPage(platform, url)
-      } else {
-        const context = await service.browser.contextFor(platform)
-        const last = context.pages()[context.pages().length - 1]
-        if (last === undefined) return { ok: false, error: { code: 'internal', message: '无页面', details: {} } }
-        page = last
-      }
-      await page.waitForLoadState('domcontentloaded', { timeout: 45_000 }).catch(() => {})
-      await new Promise((resolve) => setTimeout(resolve, 3000))
-      let clicked = false
-      const exact = page.getByRole('button', { name: text, exact: true })
-      if (await exact.count() > 0 && await exact.first().isVisible().catch(() => false)) {
-        await exact.first().click({ timeout: 10_000 }).catch(() => {})
-        clicked = true
-      } else {
-        const sub = page.locator(`button:has-text("${text}"), [role="button"]:has-text("${text}")`).first()
-        if (await sub.count() > 0 && await sub.isVisible().catch(() => false)) {
-          await sub.click({ timeout: 10_000 }).catch(() => {})
-          clicked = true
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 3500))
-      const state = await page.evaluate(() => {
-        const visible = (el: Element): boolean => {
-          const rect = el.getBoundingClientRect()
-          const style = getComputedStyle(el)
-          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
-        }
-        const inputs = [...document.querySelectorAll('input, textarea, [contenteditable="true"]')]
-          .filter(visible)
-          .map((el) => ({
-            t: el.tagName,
-            ty: el.getAttribute('type') ?? '',
-            ph: el.getAttribute('placeholder') ?? '',
-            dis: (el as HTMLInputElement).disabled === true,
-            cls: String(el.className ?? '').slice(0, 70),
-          }))
-          .slice(0, 40)
-        const buttons = [...document.querySelectorAll('button, [role="button"]')]
-          .filter(visible)
-          .map((el) => ({ tx: (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 26), dis: (el as HTMLButtonElement).disabled === true }))
-          .filter((button) => button.tx !== '')
-          .slice(0, 40)
-        return { url: location.href, inputs, buttons, bodyText: document.body.innerText.slice(0, 600) }
-      })
-      return { ok: true, value: { clicked, page: state } }
-    }
-    default:
-      return { ok: false, error: { code: 'bad-request', message: `unknown debug endpoint: ${endpoint}`, details: {} } }
-  }
 }
 
 export default { name, inject, apply }

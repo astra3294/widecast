@@ -1,6 +1,6 @@
 {
   "name": "widecast",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "面向 AI agent 的自媒体多平台管理工具 — DeepSeek Harness 原生插件(账号管理 / 草稿 / 发布队列 / 数据 / 设置)",
   "type": "module",
   "license": "MIT",
@@ -71,7 +71,9 @@
     "build": "pnpm clean && pnpm build:types && tsdown",
     "watch": "tsdown --watch",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm build"
+    "check": "pnpm typecheck && pnpm build",
+    "serve": "npx tsx src/server.ts",
+    "serve:dev": "npx tsx watch src/server.ts"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
