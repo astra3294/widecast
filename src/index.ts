@@ -69,6 +69,22 @@ function baseDir(): string {
   return override !== undefined && override !== '' ? override : join(homedir(), '.widecast')
 }
 
+/** 递归移除对象中的 undefined 值，确保 JSON 序列化安全。 */
+function removeUndefined(obj: unknown): unknown {
+  if (obj === null || obj === undefined) return obj
+  if (Array.isArray(obj)) return obj.map(removeUndefined)
+  if (typeof obj === 'object') {
+    const result: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      if (value !== undefined) {
+        result[key] = removeUndefined(value)
+      }
+    }
+    return result
+  }
+  return obj
+}
+
 const PLATFORM_IDS = PLATFORMS.map((platform) => platform.id)
 
 export function apply(ctx: HostContext): void {
@@ -250,14 +266,14 @@ export function apply(ctx: HostContext): void {
       render: renderJson,
     },
     async execute() {
-      return {
+      return removeUndefined({
         platforms: PLATFORMS.map((p) => ({
           id: p.id,
           name: p.name,
           capabilities: p.capabilities,
           publishUrl: p.publishUrl,
         })),
-      }
+      })
     },
   })
 
@@ -292,7 +308,8 @@ export function apply(ctx: HostContext): void {
       render: renderJson,
     },
     async execute() {
-      return { accounts: service.listAccounts() }
+      const accounts = service.listAccounts()
+      return removeUndefined({ accounts })
     },
   })
 
@@ -422,7 +439,26 @@ export function apply(ctx: HostContext): void {
       if (Array.isArray(args.imagePaths)) input.imagePaths = args.imagePaths.map(String)
       if (Array.isArray(args.tags)) input.tags = args.tags.map(String)
       const accountId = typeof args.accountId === 'string' ? args.accountId : undefined
-      return publishService.start(String(args.platform), input as never, { accountId })
+      const result = publishService.start(String(args.platform), input as never, { accountId })
+      // 只返回 schema 中定义的字段，移除 undefined 值
+      return removeUndefined({
+        ok: result.ok,
+        message: result.message,
+        isDuplicate: result.isDuplicate,
+        task: result.task ? {
+          id: result.task.id,
+          platform: result.task.platform,
+          status: result.task.status,
+          step: result.task.step,
+          message: result.task.message,
+          receipt: result.task.receipt ? {
+            platformPublicationId: result.task.receipt.platformPublicationId,
+            url: result.task.receipt.url,
+            proofLevel: result.task.receipt.proofLevel,
+            evidence: result.task.receipt.evidence,
+          } : undefined,
+        } : undefined,
+      })
     },
   })
 
@@ -473,7 +509,27 @@ export function apply(ctx: HostContext): void {
       render: renderJson,
     },
     async execute(args) {
-      return { task: publishService.getTask(String(args.taskId)) }
+      const task = publishService.getTask(String(args.taskId))
+      if (task === undefined) return { task: null }
+      // 只返回 schema 中定义的字段，移除 undefined 值
+      return removeUndefined({
+        task: {
+          id: task.id,
+          platform: task.platform,
+          status: task.status,
+          step: task.step,
+          message: task.message,
+          receipt: task.receipt ? {
+            platformPublicationId: task.receipt.platformPublicationId,
+            url: task.receipt.url,
+            proofLevel: task.receipt.proofLevel,
+            evidence: task.receipt.evidence,
+          } : undefined,
+          retryCount: task.retryCount,
+          createdAt: task.createdAt,
+          updatedAt: task.updatedAt,
+        },
+      })
     },
   })
 }

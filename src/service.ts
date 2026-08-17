@@ -173,14 +173,17 @@ export class WidecastService {
   }
 
   listAccounts(): AccountView[] {
-    return this.accounts.list().map((record) => ({
-      platform: record.platform,
-      name: record.name,
-      status: record.status,
-      addedAt: record.addedAt,
-      lastCheckedAt: record.lastCheckedAt,
-      lastError: record.lastError,
-    }))
+    return this.accounts.list().map((record) => {
+      const view: AccountView = {
+        platform: record.platform,
+        name: record.name,
+        status: record.status,
+        addedAt: record.addedAt,
+      }
+      if (record.lastCheckedAt !== undefined) view.lastCheckedAt = record.lastCheckedAt
+      if (record.lastError !== undefined) view.lastError = record.lastError
+      return view
+    })
   }
 
   /**
