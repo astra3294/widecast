@@ -250,10 +250,23 @@ export class PublishService {
     page: Page, taskId: string, task: PublishTask, plan: PublishPlan,
   ): Promise<void> {
     this.tasks.update(taskId, { status: 'uploading', step: 'video' })
-    const input = page.locator(plan.videoInputSelector!).first()
+
+    // 优先用 plan 中的选择器，回退到 accept*="video" 定位
+    let input = page.locator(plan.videoInputSelector!).first()
+    const count = await input.count().catch(() => 0)
+    if (count === 0) {
+      // 回退：任何 accept 包含 video 的 file input
+      input = page.locator('input[type="file"][accept*="video"]').first()
+      const fallbackCount = await input.count().catch(() => 0)
+      if (fallbackCount === 0) {
+        throw new Error(`未找到视频上传输入框（选择器: ${plan.videoInputSelector}）`)
+      }
+    }
+
     await input.waitFor({ state: 'attached', timeout: 30_000 })
     await input.setInputFiles(task.input.videoPath!)
-    // 等平台前端上传完成：标题输入框出现可交互
+
+    // 等平台前端上传完成：标题输入框出现可交互（最长 5 分钟）
     if (plan.titleInputSelector !== undefined) {
       await page.locator(plan.titleInputSelector).first().waitFor({ state: 'visible', timeout: 300_000 }).catch(() => {})
     }
@@ -263,7 +276,18 @@ export class PublishService {
     page: Page, taskId: string, task: PublishTask, plan: PublishPlan,
   ): Promise<void> {
     this.tasks.update(taskId, { status: 'uploading', step: 'images' })
-    const input = page.locator(plan.imageInputSelector!).first()
+
+    let input = page.locator(plan.imageInputSelector!).first()
+    const count = await input.count().catch(() => 0)
+    if (count === 0) {
+      // 回退：任何 accept 包含 image 的 file input
+      input = page.locator('input[type="file"][accept*="image"]').first()
+      const fallbackCount = await input.count().catch(() => 0)
+      if (fallbackCount === 0) {
+        throw new Error(`未找到图片上传输入框（选择器: ${plan.imageInputSelector}）`)
+      }
+    }
+
     await input.waitFor({ state: 'attached', timeout: 30_000 })
     await input.setInputFiles(task.input.imagePaths!)
     if (plan.titleInputSelector !== undefined) {

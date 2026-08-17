@@ -118,7 +118,8 @@ export const PLATFORMS: readonly PlatformDef[] = [
       bodyTextIn: ['内容管理'],
     },
     publish: {
-      videoInputSelector: '#joyride-wrapper input[type="file"]',
+      // 2026-08 实测: #joyride-wrapper 已不存在,改为按 accept 属性定位
+      videoInputSelector: 'input[type="file"][accept*="video"]',
       titleInputSelector: 'input[placeholder="填写作品标题，为作品获得更多流量"]',
       descInputSelector: '.zone-container.editor-kit-container.editor',
       publishButtonTexts: ['发布', '发表', '发 布', '立即投稿'],
