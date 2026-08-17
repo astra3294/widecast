@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-08-20
+
+### Added
+- **小红书适配器框架**：imageText 能力就绪，发布流程配置（选择器待登录后实测验证）
+- **小红书诊断脚本**：`scripts/diagnose-xiaohongshu.ts` 和 `scripts/e2e-xiaohongshu.ts`
+- **小红书发布页 URL**：`creator.xiaohongshu.com/publish/publish`
+- **小红书内容管理页**：`creator.xiaohongshu.com/new/content`
+
+### Changed
+- README 平台能力表：小红书标注"图文发布框架就绪"
+- 小红书 capabilities 从 `['login']` 升级为 `['login', 'imageText']`
+
 ## [0.3.0] - 2026-08-20
 
 ### 🎉 抖音端到端发布成功

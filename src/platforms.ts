@@ -143,13 +143,26 @@ export const PLATFORMS: readonly PlatformDef[] = [
   {
     id: 'xiaohongshu',
     name: '小红书',
-    capabilities: ['login'],
+    capabilities: ['login', 'imageText'],
     loginUrl: 'https://creator.xiaohongshu.com/login',
     homeUrl: 'https://creator.xiaohongshu.com/new/home',
     publishUrl: 'https://creator.xiaohongshu.com/publish/publish',
+    manageUrl: 'https://creator.xiaohongshu.com/new/content',
     loggedInUrlPatterns: ['creator.xiaohongshu.com/new', 'creator.xiaohongshu.com/publish'],
     loginUrlPatterns: ['creator.xiaohongshu.com/login', 'www.xiaohongshu.com'],
     probe: { urlPattern: '/galaxy/creator/home/personal_info', keyPaths: ['data.red_num'] },
+    // 小红书图文发布（2026-08 实测待验证，选择器基于公开页面结构）
+    publish: {
+      imageInputSelector: 'input[type="file"][accept*="image"]',
+      titleInputSelector: 'input[placeholder*="标题"], input[name="title"]',
+      descInputSelector: '[contenteditable="true"], .ql-editor, .ProseMirror',
+      publishButtonTexts: ['发布', '发布笔记', '发布视频', '发布图文'],
+      confirmButtonTexts: ['确认发布', '确定', '知道了'],
+      successTexts: ['发布成功', '已发布', '审核中', '笔记已发布'],
+      titleMaxLength: 20,
+      maxTopics: 10,
+      verifyMethods: ['content-list', 'success-toast'],
+    },
   },
   {
     id: 'bilibili',
