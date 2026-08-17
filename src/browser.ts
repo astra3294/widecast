@@ -35,6 +35,12 @@ export class BrowserManager {
       headless: !headed,
       viewport: { width: 1280, height: 860 },
       locale: 'zh-CN',
+      // 反自动化检测：禁用 AutomationControlled 特征
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+      ],
+      ignoreDefaultArgs: ['--enable-automation'],
     })
     this.contexts.set(platform, context)
     return context

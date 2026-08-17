@@ -176,7 +176,7 @@ export class PublishService {
 
       // 6) 点击发布按钮
       this.tasks.update(taskId, { status: 'publishing', step: 'submit' })
-      const editorDump = await dumpEditorState(page)
+      const editorDump = await dumpEditorState(page).catch(() => ({ url: page.url(), error: 'dump failed' }))
       const clicked = await this.clickPublishButton(page, plan)
       if (!clicked) {
         page.off('response', responseHandler)
@@ -251,20 +251,28 @@ export class PublishService {
   ): Promise<void> {
     this.tasks.update(taskId, { status: 'uploading', step: 'video' })
 
+    // 等待页面完全加载（SPA 页面需要时间渲染）
+    await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
+    await page.waitForTimeout(3000)
+
     // 优先用 plan 中的选择器，回退到 accept*="video" 定位
-    let input = page.locator(plan.videoInputSelector!).first()
-    const count = await input.count().catch(() => 0)
-    if (count === 0) {
+    // 使用 waitFor 等待元素出现（最长 60 秒），因为 file input 可能是动态加载的
+    let inputLocator = page.locator(plan.videoInputSelector!).first()
+    try {
+      await inputLocator.waitFor({ state: 'attached', timeout: 10_000 })
+    } catch {
       // 回退：任何 accept 包含 video 的 file input
-      input = page.locator('input[type="file"][accept*="video"]').first()
-      const fallbackCount = await input.count().catch(() => 0)
-      if (fallbackCount === 0) {
-        throw new Error(`未找到视频上传输入框（选择器: ${plan.videoInputSelector}）`)
+      inputLocator = page.locator('input[type="file"][accept*="video"]').first()
+      try {
+        await inputLocator.waitFor({ state: 'attached', timeout: 30_000 })
+      } catch {
+        // 最终回退：任何 file input
+        inputLocator = page.locator('input[type="file"]').first()
+        await inputLocator.waitFor({ state: 'attached', timeout: 30_000 })
       }
     }
 
-    await input.waitFor({ state: 'attached', timeout: 30_000 })
-    await input.setInputFiles(task.input.videoPath!)
+    await inputLocator.setInputFiles(task.input.videoPath!)
 
     // 等平台前端上传完成：标题输入框出现可交互（最长 5 分钟）
     if (plan.titleInputSelector !== undefined) {
@@ -277,19 +285,23 @@ export class PublishService {
   ): Promise<void> {
     this.tasks.update(taskId, { status: 'uploading', step: 'images' })
 
-    let input = page.locator(plan.imageInputSelector!).first()
-    const count = await input.count().catch(() => 0)
-    if (count === 0) {
-      // 回退：任何 accept 包含 image 的 file input
-      input = page.locator('input[type="file"][accept*="image"]').first()
-      const fallbackCount = await input.count().catch(() => 0)
-      if (fallbackCount === 0) {
-        throw new Error(`未找到图片上传输入框（选择器: ${plan.imageInputSelector}）`)
+    await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
+    await page.waitForTimeout(3000)
+
+    let inputLocator = page.locator(plan.imageInputSelector!).first()
+    try {
+      await inputLocator.waitFor({ state: 'attached', timeout: 10_000 })
+    } catch {
+      inputLocator = page.locator('input[type="file"][accept*="image"]').first()
+      try {
+        await inputLocator.waitFor({ state: 'attached', timeout: 30_000 })
+      } catch {
+        inputLocator = page.locator('input[type="file"]').first()
+        await inputLocator.waitFor({ state: 'attached', timeout: 30_000 })
       }
     }
 
-    await input.waitFor({ state: 'attached', timeout: 30_000 })
-    await input.setInputFiles(task.input.imagePaths!)
+    await inputLocator.setInputFiles(task.input.imagePaths!)
     if (plan.titleInputSelector !== undefined) {
       await page.locator(plan.titleInputSelector).first().waitFor({ state: 'visible', timeout: 300_000 }).catch(() => {})
     }
@@ -307,11 +319,17 @@ export class PublishService {
       : task.input.title
     const titleBox = page.locator(plan.titleInputSelector).first()
     await titleBox.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {})
-    await titleBox.click({ timeout: 15_000 }).catch(() => {})
-    // 全选后输入，清除平台可能自动填充的默认标题（蚁小二 onSendInput 同款思路）
-    await page.keyboard.press('Control+A')
-    await page.keyboard.press('Backspace')
-    await page.keyboard.type(title, { delay: 30 })
+
+    // 先尝试修复页面的 __name 冲突
+    await this.fixNameConflict(page)
+
+    // 用 fill() 方法
+    try {
+      await titleBox.fill(title)
+    } catch {
+      // fill 失败，用 CDP 的 Runtime.evaluate 直接设置（绕过 Playwright 的 evaluate 包装）
+      await this.cdpSetValue(page, plan.titleInputSelector!, title, 'input')
+    }
   }
 
   private async fillDescription(
@@ -329,8 +347,60 @@ export class PublishService {
     this.tasks.update(taskId, { status: 'uploading', step: 'description' })
     const descBox = page.locator(plan.descInputSelector).first()
     await descBox.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {})
-    await descBox.click({ timeout: 15_000 }).catch(() => {})
-    await page.keyboard.type(description, { delay: 10 })
+
+    await this.fixNameConflict(page)
+
+    try {
+      await descBox.fill(description)
+    } catch {
+      // contenteditable 的 fill 可能失败，用 CDP
+      await this.cdpSetValue(page, plan.descInputSelector!, description, 'contenteditable')
+    }
+  }
+
+  /** 修复抖音安全 SDK 注册的 __name getter 冲突。 */
+  private async fixNameConflict(page: Page): Promise<void> {
+    try {
+      // 用 CDP 的 Runtime.evaluate 直接执行，绕过 Playwright 的 evaluate 包装
+      const cdp = await page.context().newCDPSession(page)
+      await cdp.send('Runtime.evaluate', {
+        expression: `
+          try {
+            if (typeof __name === 'undefined' || !__name) {
+              window.__name = function(fn, name) { return fn; }
+            }
+          } catch(e) {}
+        `,
+        returnByValue: true,
+      })
+      await cdp.detach()
+    } catch {
+      // CDP 失败，忽略
+    }
+  }
+
+  /** 通过 CDP 直接设置 input 或 contenteditable 的值。 */
+  private async cdpSetValue(page: Page, selector: string, value: string, type: 'input' | 'contenteditable'): Promise<void> {
+    try {
+      const cdp = await page.context().newCDPSession(page)
+      const escapedSel = selector.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      const escapedVal = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n')
+
+      if (type === 'input') {
+        await cdp.send('Runtime.evaluate', {
+          expression: `(() => { const el = document.querySelector('${escapedSel}'); if(el) { el.focus(); el.value = '${escapedVal}'; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); } })()`,
+          returnByValue: true,
+        })
+      } else {
+        await cdp.send('Runtime.evaluate', {
+          expression: `(() => { const el = document.querySelector('${escapedSel}'); if(el) { el.focus(); el.textContent = '${escapedVal}'; el.dispatchEvent(new Event('input', {bubbles:true})); } })()`,
+          returnByValue: true,
+        })
+      }
+      await cdp.detach()
+    } catch {
+      // CDP 也失败，跳过
+    }
   }
 
   // ─── 发布按钮点击 ──────────────────────────────────────────────────────
