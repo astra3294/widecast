@@ -212,6 +212,19 @@ export class PublishService {
       // 7) 处理确认弹窗
       await this.handleConfirmDialogs(page, plan)
 
+      // 7.5) 检测验证码/二次验证（点击发布后立即检查）
+      this.tasks.update(taskId, { status: 'verifying', step: 'check-captcha' })
+      const captchaDetected = await this.detectCaptcha(page)
+      if (captchaDetected) {
+        page.off('response', responseHandler)
+        this.tasks.update(taskId, {
+          status: 'needs_attention',
+          step: 'captcha-required',
+          message: '平台要求验证码或二次验证，请手动完成后重试',
+        })
+        return
+      }
+
       // 8) 等待发布响应（不离开当前页面）
       this.tasks.update(taskId, { status: 'verifying', step: 'wait-response' })
       const receipt = await this.waitForPublishResult(page, platform, plan, task, publishResponseCollector)
@@ -506,6 +519,12 @@ export class PublishService {
     // 等待一段时间让平台处理
     await page.waitForTimeout(5000)
 
+    // 检查是否出现验证码/二次验证
+    const captchaDetected = await this.detectCaptcha(page)
+    if (captchaDetected) {
+      throw new Error('平台要求验证码或二次验证，请手动完成后重试')
+    }
+
     // 检查是否出现成功提示
     const successReceipt = await this.checkSuccessToast(page, plan, collector)
     if (successReceipt !== undefined) return successReceipt
@@ -525,6 +544,52 @@ export class PublishService {
     if (delayedSuccessReceipt !== undefined) return delayedSuccessReceipt
 
     return undefined
+  }
+
+  /** 检测验证码/二次验证弹窗。 */
+  private async detectCaptcha(page: Page): Promise<boolean> {
+    // 常见验证码/验证特征
+    const captchaSelectors = [
+      // 滑块验证码
+      '.captcha-slider',
+      '.slide-verify',
+      '[class*="captcha"]',
+      '[class*="verify"]',
+      // 图形验证码
+      'img[src*="captcha"]',
+      'img[src*="verify"]',
+      // 短信验证码
+      'input[placeholder*="验证码"]',
+      'input[placeholder*="短信"]',
+      // 人机验证
+      '.geetest_panel',
+      '.tcaptcha-popup',
+      '#captcha',
+      // 抖音特定
+      '[class*="secsdk"]',
+      '[class*="verify"]',
+    ]
+
+    for (const selector of captchaSelectors) {
+      const count = await page.locator(selector).count()
+      if (count > 0) {
+        const visible = await page.locator(selector).first().isVisible().catch(() => false)
+        if (visible) {
+          return true
+        }
+      }
+    }
+
+    // 检查页面文本中是否包含验证码相关关键词
+    const bodyText = await page.evaluate(() => document.body.innerText.slice(0, 2000)).catch(() => '')
+    const captchaKeywords = ['验证码', '短信验证', '滑动验证', '拖动滑块', '请完成验证', '安全验证', '人机验证']
+    for (const keyword of captchaKeywords) {
+      if (bodyText.includes(keyword)) {
+        return true
+      }
+    }
+
+    return false
   }
 
   /** 检查成功提示文本。 */

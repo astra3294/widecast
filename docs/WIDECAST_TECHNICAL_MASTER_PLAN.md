@@ -2,7 +2,7 @@
 
 > 状态：Phase 0 已完成，Phase 1 进行中
 > 目标读者：项目所有者、开发 Agent、后续贡献者
-> 基线日期：2026-08-18（v0.2.0 更新：2026-08-20）
+> 基线日期：2026-08-18（v0.4.1 更新：2026-08-20）
 > 项目目录：`E:\自媒体\widecast`
 
 ## 0. 给开发 Agent 的执行入口
@@ -11,14 +11,16 @@
 
 1. `README.md`
 2. `package.json`
-3. `src/index.ts`
-4. `src/types.ts`
-5. `src/platforms.ts`
-6. `src/browser.ts`
-7. `src/publish.ts`
-8. `src/service.ts`
-9. `src/tasks.ts`
-10. `src/client/index.tsx`
+3. `src/index.ts`（DSH 工具层客户端）
+4. `src/client.ts`（Widecast 客户端）
+5. `src/server.ts`（Widecast 独立服务）
+6. `src/types.ts`
+7. `src/platforms.ts`
+8. `src/browser.ts`
+9. `src/publish.ts`
+10. `src/service.ts`
+11. `src/tasks.ts`
+12. `src/client/index.tsx`
 
 执行规则：
 
@@ -29,6 +31,25 @@
 - 可以研究产品的公开行为和公开页面，然后以 clean-room 方式独立实现同类能力。
 - 任何平台都必须通过验收矩阵后，才可以在 UI 和 Agent 工具中标记为"可发布"。
 - 对真实账号执行发布、删除等写操作前，先使用测试账号或草稿模式验证。
+
+### ⚠️ 重要：Widecast 独立服务架构
+
+**Widecast 采用独立服务架构，不需要重启 DSH！**
+
+```
+架构：
+DSH ←→ Widecast 客户端（src/index.ts）←→ Widecast 独立服务（src/server.ts）
+
+启动顺序：
+1. 启动 Widecast 服务：pnpm serve（端口 18080）
+2. 启动 DSH：dsh --profile web
+3. DSH 通过 HTTP RPC 调用 Widecast 服务
+
+代码修改后：
+- 只需重启 Widecast 服务（pnpm serve）
+- 不需要重启 DSH
+- 支持热重载（pnpm serve:dev）
+```
 
 ---
 

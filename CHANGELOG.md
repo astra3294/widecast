@@ -2,9 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1] - 2026-08-20
+
+### Fixed
+- **验证码检测**：发布流程中加入验证码/二次验证检测
+  - 点击发布按钮后立即检测验证码弹窗
+  - 检测到验证码时标记为 `needs_attention` 状态
+  - 通知用户"平台要求验证码或二次验证，请手动完成后重试"
+  - 不再误报为"发布成功"
+
+### Changed
+- 发布流程增加 `check-captcha` 步骤
+- 验证码检测包括：滑块验证码、图形验证码、短信验证码、人机验证
+
 ## [0.4.0] - 2026-08-20
 
-### 🎉 架构升级：Widecast 独立服务模式
+### 🎉 架构升级：Widecast 独立服务模式 + DSH 工具层验证成功
 
 **重大改进**：Widecast 从 DSH 插件模式升级为独立服务模式。
 
@@ -13,6 +26,36 @@ All notable changes to this project will be documented in this file.
 - 支持热重载（`pnpm serve:dev`）
 - 独立进程，更稳定
 - DSH 通过 HTTP RPC 调用 Widecast 服务
+
+### 验证结果
+
+**DSH 工具层调用独立服务成功**：
+- `widecast_ping` → ✅ 版本 0.4.0
+- `widecast_check_account(douyin)` → ✅ 抖音账号正常
+- `widecast_publish` → ✅ 任务创建成功
+- `widecast_get_task_status` → ✅ 状态查询正常
+
+**抖音发布成功**（通过 DSH 工具层）：
+```
+任务 ID: d3daa0a7-7fa4-41c1-b6fa-d29c32492ac7
+状态: done (verified)
+凭证等级: B (success-toast)
+证据: 检测到成功提示
+```
+
+### Added
+- **Widecast 独立服务**：`src/server.ts` — HTTP/RPC 服务器（端口 18080）
+- **Widecast 客户端**：`src/client.ts` — 通过 HTTP 调用独立服务
+- **自动账号检查**：`widecast_check_account` 工具 — 发布前检查账号状态
+- **服务启动脚本**：`pnpm serve` 和 `pnpm serve:dev`
+
+### Changed
+- **DSH 工具层**：从直接调用模块改为调用独立服务
+- **架构**：从单进程插件模式改为独立服务 + DSH 客户端模式
+
+### Fixed
+- **DSH 热重载问题**：不再依赖 DSH 重启来加载新代码
+- **工具层 lossless JSON 兼容**：独立服务统一处理 JSON 序列化
 
 ### Added
 - **Widecast 独立服务**：`src/server.ts` — HTTP/RPC 服务器（端口 18080）

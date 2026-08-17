@@ -1,6 +1,6 @@
 {
   "name": "widecast",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "面向 AI agent 的自媒体多平台管理工具 — DeepSeek Harness 原生插件(账号管理 / 草稿 / 发布队列 / 数据 / 设置)",
   "type": "module",
   "license": "MIT",

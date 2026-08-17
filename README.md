@@ -10,6 +10,25 @@
   不逆向密码学签名、不伪造设备指纹、不伪装 UA；默认限速 + 全量审计日志，不与平台风控对抗；
 - 登录与验证码一律由真人完成。
 
+## ⚠️ 重要：独立服务架构
+
+**Widecast 采用独立服务架构，不需要重启 DSH！**
+
+```
+架构：
+DSH ←→ Widecast 客户端（src/index.ts）←→ Widecast 独立服务（src/server.ts）
+
+启动顺序：
+1. 启动 Widecast 服务：pnpm serve（端口 18080）
+2. 启动 DSH：dsh --profile web
+3. DSH 通过 HTTP RPC 调用 Widecast 服务
+
+代码修改后：
+- 只需重启 Widecast 服务（pnpm serve）
+- 不需要重启 DSH
+- 支持热重载（pnpm serve:dev）
+```
+
 ## 安装
 
 ```bash
@@ -23,11 +42,11 @@ dsh plugin --profile web add link:E:/自媒体/widecast
 cd E:\自媒体\widecast
 pnpm serve
 
-# 重启 Harness
+# 启动 DSH（Widecast 服务已启动后）
 dsh --profile web
 ```
 
-重启后刷新页面，左下角设置按钮旁会出现「自媒体」入口。
+启动后刷新页面，左下角设置按钮旁会出现「自媒体」入口。
 
 ## 开发模式
 
@@ -35,7 +54,7 @@ dsh --profile web
 # 启动 Widecast 独立服务（端口 18080）
 pnpm serve
 
-# 开发模式（自动重载）
+# 开发模式（自动重载，代码修改后自动重启服务）
 pnpm serve:dev
 
 # 构建
