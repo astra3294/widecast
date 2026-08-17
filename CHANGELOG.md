@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2] - 2026-08-20
+
+### 🎉 抖音发布再次验证成功
+
+第二次在真实抖音页面完成视频发布闭环：
+
+```
+状态: done (verified)
+凭证等级: B (success-toast)
+证据: 检测到成功提示：已发布
+任务统计: 8 个成功任务
+```
+
+### Fixed
+- **DSH 工具层 lossless JSON 兼容**：新增 `removeUndefined()` 递归移除对象中的 `undefined` 值
+- **service.listAccounts()**：不再返回包含 `undefined` 的对象
+
+### Known Issues
+- DSH 不支持模块级热重载（只 watch `cordis.patch.yml`），需要重启 DSH 才能让工具修复生效
+- 浏览器档案被 DSH 进程占用时，需要先清理 Chrome 进程
+
 ## [0.3.1] - 2026-08-20
 
 ### Added
