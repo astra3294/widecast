@@ -1,7 +1,7 @@
 /**
- * 账号服务:把 浏览器档案 + 账号存储 + 登录态探测 串起来。
- * 登录探测学习自蚁小二 platformMapsIn 探针表(报告 02 §2),原创实现:
- * 观察真实浏览器页面自身的接口流量与 localStorage,不注入、不伪造。
+ * 账号服务：浏览器档案 + 账号存储 + 登录态探测。
+ *
+ * 登录探测基于平台公开页面的实际行为，不注入、不伪造。
  */
 import type { BrowserContext, Response as PwResponse } from 'playwright'
 import { AccountStore, type AccountRecord, type AccountStatus } from './accounts.js'
@@ -164,7 +164,12 @@ export class WidecastService {
   }
 
   listPlatforms() {
-    return PLATFORMS.map((platform) => ({ id: platform.id, name: platform.name, publishUrl: platform.publishUrl }))
+    return PLATFORMS.map((platform) => ({
+      id: platform.id,
+      name: platform.name,
+      capabilities: platform.capabilities,
+      publishUrl: platform.publishUrl,
+    }))
   }
 
   listAccounts(): AccountView[] {

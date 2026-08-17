@@ -1,10 +1,10 @@
 /**
- * widecast 客户端半边:Harness 侧栏左下角入口 + 自媒体管理面板。
+ * widecast 客户端半边：Harness 侧栏左下角入口 + 自媒体管理面板。
  *
- * 槽位(均已在本机安装源码核实):
- *  - `sidebar.footer.action`(kind list):设置按钮旁的左下角动作区,props { wide }
- *  - `shell.overlay`(kind list):全框架悬浮层,Modal 挂这里
- * 宿主通信:ctx.get('connection').rpc.call('/widecast', endpoint, payload)
+ * 槽位：
+ *  - `sidebar.footer.action`（kind list）：设置按钮旁的左下角动作区
+ *  - `shell.overlay`（kind list）：全框架悬浮层，Modal 挂这里
+ * 宿主通信：ctx.get('connection').rpc.call('/widecast', endpoint, payload)
  */
 import { useSyncExternalStore, type ReactNode, type SVGProps } from 'react'
 import { Button, Modal, StateDot, type StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -14,7 +14,7 @@ import { installWidecastStyles } from './styles.js'
 
 type Translator = (key: string) => string
 
-/** 广播/分发图标:widecast(广而播之)。 */
+/** 广播/分发图标。 */
 function BroadcastIcon({ size = 16, ...props }: SVGProps<SVGSVGElement> & { size?: number }): ReactNode {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...props}>
@@ -51,12 +51,30 @@ interface AccountView {
 interface PlatformView {
   id: string
   name: string
+  capabilities: string[]
   publishUrl?: string
 }
 
 type PanelTab = 'accounts' | 'queue' | 'drafts' | 'stats' | 'settings'
 
-type TaskStatus = 'queued' | 'uploading' | 'publishing' | 'done' | 'failed'
+type TaskStatus =
+  | 'draft'
+  | 'queued'
+  | 'uploading'
+  | 'publishing'
+  | 'verifying'
+  | 'done'
+  | 'needs_attention'
+  | 'retryable_failed'
+  | 'terminal_failed'
+  | 'cancelled'
+
+interface PublishReceiptView {
+  platformPublicationId?: string
+  url?: string
+  proofLevel?: string
+  evidence?: string[]
+}
 
 interface TaskView {
   id: string
@@ -65,6 +83,8 @@ interface TaskView {
   status: TaskStatus
   step: string
   message?: string
+  receipt?: PublishReceiptView
+  retryCount?: number
   createdAt: number
   updatedAt: number
 }
@@ -153,14 +173,13 @@ class WidecastController {
     }
   }
 
-  /** 面板侧添加账号:立即返回登录引导,随后轮询登录探测直至成功或超时。 */
   async addAccount(platform: string): Promise<void> {
     this.patch({ busy: true, hint: undefined, qr: undefined, error: undefined })
     try {
       const result = await this.call<{ message?: string; status?: string; qrCodeImage?: string }>('accounts.add', { platform, waitMs: 0 })
       if (result.status === 'ok') {
         await this.loadAccounts()
-        this.patch({ busy: false, hint: result.message ?? '登录成功,账号已保存' })
+        this.patch({ busy: false, hint: result.message ?? '登录成功，账号已保存' })
         return
       }
       this.patch({ hint: result.message ?? '请扫码登录', qr: result.qrCodeImage })
@@ -169,11 +188,11 @@ class WidecastController {
         const check = await this.call<{ loggedIn: boolean }>('accounts.check', { platform })
         if (check.loggedIn) {
           await this.loadAccounts()
-          this.patch({ busy: false, qr: undefined, hint: '登录成功,账号已保存' })
+          this.patch({ busy: false, qr: undefined, hint: '登录成功，账号已保存' })
           return
         }
       }
-      this.patch({ busy: false, hint: '仍在等待登录;完成后点「全部体检」' })
+      this.patch({ busy: false, hint: '仍在等待登录；完成后点「全部体检」' })
     } catch (error) {
       this.patch({ busy: false, error: String(error) })
     }
@@ -200,6 +219,28 @@ class WidecastController {
     }
   }
 
+  async retryTask(taskId: string): Promise<void> {
+    this.patch({ busy: true, error: undefined })
+    try {
+      await this.call('publish.retry', { taskId })
+      await this.loadTasks()
+      this.patch({ busy: false })
+    } catch (error) {
+      this.patch({ busy: false, error: String(error) })
+    }
+  }
+
+  async cancelTask(taskId: string): Promise<void> {
+    this.patch({ busy: true, error: undefined })
+    try {
+      await this.call('publish.cancel', { taskId })
+      await this.loadTasks()
+      this.patch({ busy: false })
+    } catch (error) {
+      this.patch({ busy: false, error: String(error) })
+    }
+  }
+
   private patch(next: Partial<WidecastSnapshot>): void {
     this.snapshot = { ...this.snapshot, ...next }
     for (const listener of this.listeners) listener()
@@ -212,8 +253,8 @@ class WidecastController {
     } catch (error) {
       const raw = String(error)
       throw new Error(raw.includes('Invalid input')
-        ? `与宿主通信失败(宿主版本可能未更新,请重启 Harness):${endpoint}`
-        : `${endpoint} 通信失败:${raw.slice(0, 300)}`)
+        ? `与宿主通信失败（宿主版本可能未更新，请重启 Harness）：${endpoint}`
+        : `${endpoint} 通信失败：${raw.slice(0, 300)}`)
     }
     if (!result.ok) throw new Error(result.error?.message ?? `${endpoint} failed`)
     return result.value as T
@@ -288,7 +329,6 @@ function TabBar({ snapshot, controller, t }: SharedProps & { snapshot: WidecastS
 }
 
 function AccountsTab({ snapshot, controller, t }: SharedProps & { snapshot: WidecastSnapshot }): ReactNode {
-  // 只有"在线"的平台视为已添加;失效/未知的平台仍显示登录按钮(可重登)
   const added = new Set(snapshot.accounts.filter((item) => item.status === 'ok').map((item) => item.platform))
   const addable = snapshot.platforms.filter((platform) => !added.has(platform.id))
   return (
@@ -340,28 +380,36 @@ function AccountsTab({ snapshot, controller, t }: SharedProps & { snapshot: Wide
 }
 
 function PlaceholderTab({ tab, t }: { tab: PanelTab; t: Translator }): ReactNode {
-  return <p className="widecastEmpty">{t('placeholder')}{t(`tab.${tab}`)}({t('placeholder.dev')})</p>
+  return <p className="widecastEmpty">{t('placeholder')}{t(`tab.${tab}`)}（{t('placeholder.dev')}）</p>
 }
 
 function taskDot(status: TaskStatus): StateDotState {
   switch (status) {
     case 'done': return 'done'
-    case 'failed': return 'error'
+    case 'terminal_failed': return 'error'
+    case 'needs_attention':
+    case 'retryable_failed': return 'warning'
     default: return 'ongoing'
   }
 }
 
 function taskLabel(status: TaskStatus, t: Translator): string {
   switch (status) {
+    case 'draft': return t('task.draft')
     case 'queued': return t('task.queued')
     case 'uploading': return t('task.uploading')
     case 'publishing': return t('task.publishing')
+    case 'verifying': return t('task.verifying')
     case 'done': return t('task.done')
-    case 'failed': return t('task.failed')
+    case 'needs_attention': return t('task.needs_attention')
+    case 'retryable_failed': return t('task.retryable_failed')
+    case 'terminal_failed': return t('task.terminal_failed')
+    case 'cancelled': return t('task.cancelled')
+    default: return status
   }
 }
 
-function QueueTab({ snapshot, t }: { snapshot: WidecastSnapshot; t: Translator }): ReactNode {
+function QueueTab({ snapshot, controller, t }: { snapshot: WidecastSnapshot; controller: WidecastController; t: Translator }): ReactNode {
   if (snapshot.tasks.length === 0) return <p className="widecastEmpty">{t('task.empty')}</p>
   return (
     <ul className="widecastAccountList">
@@ -373,8 +421,23 @@ function QueueTab({ snapshot, t }: { snapshot: WidecastSnapshot; t: Translator }
             <p>
               {taskLabel(task.status, t)}
               {task.message !== undefined && task.message !== '' ? ` · ${task.message}` : ''}
+              {task.receipt?.url !== undefined ? ` · ${task.receipt.url}` : ''}
+              {task.receipt?.proofLevel !== undefined ? ` [${task.receipt.proofLevel}]` : ''}
               {' · '}{new Date(task.createdAt).toLocaleTimeString()}
+              {(task.retryCount ?? 0) > 0 ? ` · 重试${task.retryCount}次` : ''}
             </p>
+          </div>
+          <div className="widecastActions">
+            {(task.status === 'retryable_failed' || task.status === 'needs_attention') ? (
+              <Button variant="ghost" size="sm" disabled={snapshot.busy} onClick={() => { void controller.retryTask(task.id) }}>
+                {t('task.retry')}
+              </Button>
+            ) : null}
+            {task.status === 'queued' ? (
+              <Button variant="ghost" size="sm" disabled={snapshot.busy} onClick={() => { void controller.cancelTask(task.id) }}>
+                {t('task.cancel')}
+              </Button>
+            ) : null}
           </div>
         </li>
       ))}
@@ -397,7 +460,7 @@ function WidecastPanel({ controller, t }: SharedProps): ReactNode {
       {snapshot.error !== undefined ? <div className="widecastError" role="alert">{snapshot.error}</div> : null}
       {!snapshot.available ? <div className="widecastError" role="alert">{t('summary.unavailable')}</div> : null}
       {snapshot.tab === 'accounts' ? <AccountsTab snapshot={snapshot} controller={controller} t={t} /> : null}
-      {snapshot.tab === 'queue' ? <QueueTab snapshot={snapshot} t={t} /> : null}
+      {snapshot.tab === 'queue' ? <QueueTab snapshot={snapshot} controller={controller} t={t} /> : null}
       {snapshot.tab !== 'accounts' && snapshot.tab !== 'queue' ? <PlaceholderTab tab={snapshot.tab} t={t} /> : null}
       <p className="widecastVersion">{t('version.label')} v{WIDECAST_VERSION}</p>
     </Modal>
@@ -411,22 +474,28 @@ const en: Record<string, string> = {
   'account.checkAll': 'Check all', 'account.empty': 'No accounts yet — add a platform below.',
   'account.addTitle': 'Add platform', 'account.add': 'Add', 'account.remove': 'Remove', 'account.allAdded': 'All platforms added.',
   'account.ok': 'Online', 'account.expired': 'Expired', 'account.unknown': 'Unknown',
-  'placeholder': 'The ', 'placeholder.dev': ' tab is under development.',
+  'placeholder': 'The ', 'placeholder.dev': 'tab is under development.',
   'task.empty': 'No publish tasks yet. Use the widecast_publish tool or ask the agent to publish.',
-  'task.queued': 'Queued', 'task.uploading': 'Uploading', 'task.publishing': 'Publishing', 'task.done': 'Done', 'task.failed': 'Failed',
+  'task.draft': 'Draft', 'task.queued': 'Queued', 'task.uploading': 'Uploading', 'task.publishing': 'Publishing',
+  'task.verifying': 'Verifying', 'task.done': 'Done', 'task.needs_attention': 'Needs Attention',
+  'task.retryable_failed': 'Retryable Failed', 'task.terminal_failed': 'Failed', 'task.cancelled': 'Cancelled',
+  'task.retry': 'Retry', 'task.cancel': 'Cancel',
   'version.label': 'Version',
 }
 
 const zh: Record<string, string> = {
   name: '自媒体', open: '打开自媒体管理', close: '关闭', title: '自媒体管理',
-  'summary.unavailable': '无法连接 widecast 宿主服务,请刷新页面或重启 profile。',
+  'summary.unavailable': '无法连接 widecast 宿主服务，请刷新页面或重启 profile。',
   'tab.accounts': '账号', 'tab.queue': '发布队列', 'tab.drafts': '草稿', 'tab.stats': '数据', 'tab.settings': '设置',
-  'account.checkAll': '全部体检', 'account.empty': '还没有账号,在下方添加平台登录。',
+  'account.checkAll': '全部体检', 'account.empty': '还没有账号，在下方添加平台登录。',
   'account.addTitle': '添加平台', 'account.add': '登录', 'account.remove': '移除', 'account.allAdded': '已全部添加。',
   'account.ok': '在线', 'account.expired': '已失效', 'account.unknown': '未知',
   'placeholder': '', 'placeholder.dev': 'tab 开发中。',
   'task.empty': '还没有发布任务。对 agent 说"帮我把这个视频发到抖音"即可。',
-  'task.queued': '排队中', 'task.uploading': '上传中', 'task.publishing': '发布中', 'task.done': '完成', 'task.failed': '失败',
+  'task.draft': '草稿', 'task.queued': '排队中', 'task.uploading': '上传中', 'task.publishing': '发布中',
+  'task.verifying': '验证中', 'task.done': '完成', 'task.needs_attention': '需要关注',
+  'task.retryable_failed': '可重试失败', 'task.terminal_failed': '失败', 'task.cancelled': '已取消',
+  'task.retry': '重试', 'task.cancel': '取消',
   'version.label': '版本',
 }
 

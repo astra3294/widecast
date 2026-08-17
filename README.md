@@ -1,41 +1,82 @@
 # widecast — 面向 AI agent 的自媒体管理工具
 
-广而播之(wide·cast)。**完全原创、免费(MIT)** 的自媒体多平台管理工具,以
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 原生插件形态融入 Harness:
+广而播之（wide·cast）。**完全原创、免费（MIT）** 的自媒体多平台管理工具，以
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 原生插件形态融入 Harness：
 
-- 侧栏**左下角**新增「自媒体」入口,点击打开管理面板(账号 / 草稿 / 发布队列 / 数据 / 设置);
-- 模型获得一等公民工具(`widecast_list_accounts`、`widecast_publish` 等),可用自然语言管理账号与发布内容;
-- 平台会话凭证仅存本机(经 DSH 凭证服务加密),永不进入对话上下文;
-- 自动化以**浏览器模式为主**(playwright 驱动真人会话的真实浏览器,平台签名/指纹天然合法),
-  不逆向密码学签名、不伪造设备指纹、不伪装 UA;默认限速 + 全量审计日志,不与平台风控对抗;
+- 侧栏**左下角**新增「自媒体」入口，点击打开管理面板（账号 / 发布队列 / 草稿 / 数据 / 设置）；
+- 模型获得一等公民工具（`widecast_list_accounts`、`widecast_publish` 等），可用自然语言管理账号与发布内容；
+- 平台会话凭证仅存本机（经浏览器档案加密），永不进入对话上下文；
+- 自动化以**浏览器模式为主**（Playwright 驱动真人会话的真实浏览器，平台签名/指纹天然合法），
+  不逆向密码学签名、不伪造设备指纹、不伪装 UA；默认限速 + 全量审计日志，不与平台风控对抗；
 - 登录与验证码一律由真人完成。
 
 ## 安装
 
 ```bash
-# 把 widecast 安装进 web profile(local link 开发模式)
+# 把 widecast 安装进 web profile（local link 开发模式）
 dsh plugin --profile web add link:E:/自媒体/widecast
 
 # 在 profile 的 package.json `dsh.profile.bundles` 中加入 "widecast"
-# (widecast 自带的 cordis.patch.yml 会把插件 insert 进 loader)
+# （widecast 自带的 cordis.patch.yml 会把插件 insert 进 loader）
 
 # 重启 Harness
 dsh --profile web
 ```
 
-重启后刷新页面,左下角设置按钮旁会出现「自媒体」入口。
+重启后刷新页面，左下角设置按钮旁会出现「自媒体」入口。
+
+## 核心能力
+
+### 发布闭环（v0.2.0）
+
+- **完整状态机**：draft → queued → uploading → publishing → verifying → done / needs_attention / retryable_failed / terminal_failed
+- **幂等防重复**：SHA-256 幂等键（account + platform + content-fingerprint + time-bucket），相同内容不会重复发布
+- **发布凭证（Receipt）**：A/B/C 三级证明（网络响应 / 成功提示 / 内容列表确认），每次发布都有可验证的结果
+- **安全重试**：retryable_failed 和 needs_attention 状态支持手动重试，不会自动重复发布
+- **响应监听**：点击发布前注册响应监听，不立即离开发布页，确保捕获平台返回
+
+### 平台能力分级
+
+每个平台的能力独立验证，只有通过验收矩阵的能力才会被标记为已实现：
+
+| 平台 | 登录 | 视频发布 | 图文发布 | 结果验证 |
+|------|------|----------|----------|----------|
+| 抖音 | ✅ | ✅ | ✅ | ✅ |
+| 小红书 | ✅ | - | - | - |
+| B站 | ✅ | - | - | - |
+| 快手 | ✅ | - | - | - |
+| 视频号 | ✅ | - | - | - |
+| 公众号 | ✅ | - | - | - |
+| 微博 | ✅ | - | - | - |
+| 头条号 | ✅ | - | - | - |
+| 百家号 | ✅ | - | - | - |
+| 知乎 | ✅ | - | - | - |
+
+### Agent 工具
+
+- `widecast_ping` — 检查插件状态
+- `widecast_list_platforms` — 列出平台及能力
+- `widecast_list_accounts` — 列出已登录账号
+- `widecast_add_account` — 添加账号（真人扫码）
+- `widecast_remove_account` — 移除账号
+- `widecast_publish` — 发布内容（支持幂等防重复）
+- `widecast_get_task_status` — 查询任务状态和 Receipt
 
 ## 结构
 
 ```
-src/index.ts          宿主半边:引擎 + 模型工具 + 面板 RPC(ctx.connection.rpc)
-src/client/index.tsx  客户端半边:左下角入口 + 管理面板(slots + primitives + --dsw-* token)
+src/index.ts          宿主半边：引擎 + 模型工具 + 面板 RPC
+src/types.ts          类型定义：状态机 + Receipt + 幂等键
+src/platforms.ts      平台目录：能力分级 + 发布流程配置
+src/browser.ts        浏览器管理：每平台独立档案
+src/publish.ts        发布服务：响应监听 + 结果验证 + Receipt
+src/service.ts        账号服务：登录探测 + 健康检查
+src/tasks.ts          任务存储：状态持久化 + 幂等检查
+src/accounts.ts       账号存储：JSON 文件
+src/client/index.tsx  客户端半边：管理面板 UI
 cordis.patch.yml      插件 insert 补丁
-tsdown.config.ts      三段构建(library / client);client 经 __ModuleLoader__ 装载
+tsdown.config.ts      三段构建
 ```
-
-- 宿主半边**刻意零 `@deepseek-ai/*` 导入**(linked 包模块解析回退不到 dsh 内部),服务全部经 ctx 注入;
-- 面板通信走 loopback RPC;样式全部使用 Harness `--dsw-*` 设计 token,深浅色自适应。
 
 ## 开发
 
@@ -43,16 +84,20 @@ tsdown.config.ts      三段构建(library / client);client 经 __ModuleLoader__
 pnpm install
 pnpm check          # typecheck + build
 pnpm watch          # 客户端 tsdown --watch → HMR 自动重载
+
+# 启用 debug 接口（仅开发模式）
+WIDECAST_DEV=1 dsh --profile web
 ```
 
 ## 路线图
 
-- **P0(当前)** 插件链路:入口 / 面板 / RPC / `widecast_ping` 工具 / CI
-- **P1** 账号管理:平台登录引导(真人扫码)、账号状态、凭证存取、**账号保活 v1(心跳健康检查 + 失效提醒)**
-- **P2** 发布闭环:发布管线(含**断点恢复**)、队列面板、`widecast_publish` 等工具、**发布成败通知**
-- **P3** **数据面板(阅读/互动/粉丝回读)**、草稿箱、设置、**系统级通知(账号失效/保活提醒)**、更多平台、SKILL 工作流包、npm 正式发布
+- **P0（已完成）** 插件链路：入口 / 面板 / RPC / 工具 / CI / 发布闭环
+- **P1（进行中）** 平台扩展：小红书 / B站 / 视频号 / 快手
+- **P2** Worker + SQLite：DSH 重启不影响上传和定时任务
+- **P3** 数据面板：阅读 / 互动 / 粉丝回读 / 草稿箱 / 设置
+- **P4** 产品化：安装器 / 自动更新 / 数据备份 / 团队协作
 
 ## 免责声明
 
-本项目为原创实现,不包含任何第三方商业软件代码;自动化能力面向用户自有账号,
-请遵守各平台服务条款,风险自负。
+本项目为原创实现，不包含任何第三方商业软件代码；自动化能力面向用户自有账号，
+请遵守各平台服务条款，风险自负。
