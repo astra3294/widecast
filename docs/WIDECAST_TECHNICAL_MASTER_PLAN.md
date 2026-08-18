@@ -1,8 +1,8 @@
 # Widecast 技术总规划
 
-> 状态：Phase 0 已完成，Phase 1 进行中
+> 状态：Phase 0 已完成，Phase 1（抖音可靠闭环）进行中
 > 目标读者：项目所有者、开发 Agent、后续贡献者
-> 基线日期：2026-08-18（v0.4.1 更新：2026-08-20）
+> 基线日期：2026-08-18（v0.5.0 更新：状态/幂等/认证/发布证明硬化）
 > 项目目录：`E:\自媒体\widecast`
 
 ## 0. 给开发 Agent 的执行入口
@@ -187,7 +187,7 @@ DSH 插件负责 Agent 工具、权限、UI 和状态展示；本地 Worker 负�
 
 原因：DSH 刷新或升级不能中断正在上传的视频，长任务也不应阻塞插件宿主。
 
-**v0.2.0 更新**：当前版本采用单进程架构（插件 + 发布服务在同一进程），Worker 分离将在 Phase 2 实现。
+**v0.5.0 更新**：当前版本采用“DSH 插件 + 独立 HTTP 服务”架构。服务仍使用 JSON 任务存储和单进程账号级串行队列；Worker/SQLite 分离仍在 Phase 2，不能把当前服务描述成 durable Worker。
 
 ### ADR-005：TypeScript 作为唯一主语言
 
@@ -325,7 +325,7 @@ interface PlatformAdapter {
 
 UI 与 Agent 只能依据 Manifest 展示能力。不能因为平台存在登录 URL，就宣称它"支持发布"。
 
-**v0.2.0 更新**：当前版本使用 `capabilities` 数组标记平台能力（`login | video | imageText | article | verify`），只有标记了的能力才在 UI 和工具中展示为可用。
+**v0.5.0 更新**：当前版本使用 `capabilities` 数组标记平台能力（`login | video | imageText | article | verify`），只有标记了的能力才在 UI 和工具中展示为可用。小红书当前仅保留 `login`，其发布选择器框架在真实验收前不对外宣称可发布。
 
 ### 6.1 元素定位策略
 
@@ -353,24 +353,19 @@ UI 与 Agent 只能依据 Manifest 展示能力。不能因为平台存在登录
 
 ## 7. 发布闭环与"我到底发了什么"
 
-### 7.1 状态机（v0.2.0 已实现）
+### 7.1 状态机（v0.5.0 规范）
 
 ```text
-draft
-  → validating
-  → scheduled / queued
-  → preparing
-  → uploading
-  → submitting
-  → verifying
-  → published
-             ↘ needs_attention
+draft → scheduled / queued → uploading → submitting → verifying → published
+                                                               ↘ needs_attention
 任一步骤失败 → retryable_failed / terminal_failed / cancelled
 ```
 
 `needs_attention` 与 `failed` 必须分开。已经点击发布但暂时找不到作品时，不能简单标记失败并自动重发，否则可能产生重复内容。
 
-### 7.2 幂等与防重复（v0.2.0 已实现）
+对外工具和持久化任务使用 `submitting` / `published`，不再使用旧版的 `publishing` / `done`；读取旧 JSON 时做一次状态迁移。
+
+### 7.2 幂等与防重复（v0.5.0 已强化）
 
 为每个目标任务计算幂等键：
 
@@ -378,8 +373,8 @@ draft
 SHA-256(account-id + platform + content-fingerprint + scheduled-time-bucket)
 ```
 
-- 创建任务时检查相同幂等键。
-- `submitting` 之后不得自动新建重试任务；必须先执行 reconcile。
+- 创建任务时检查相同幂等键；已发布、排队中、失败待重试和结果不确定的任务都返回原任务。
+- `submitting` 之后不得自动新建重试任务；`needs_attention` 只能在人工确认内容列表没有作品后显式重试。
 - 上传前记录素材 hash、大小和时长。
 - Agent 请求"再发一次"时明确告诉它已有任务和现有凭证。
 
@@ -390,7 +385,7 @@ SHA-256(account-id + platform + content-fingerprint + scheduled-time-bucket)
 1. **A级**：页面自身的发布响应返回成功且包含作品 ID/URL。
 2. **A级**：创作者内容列表出现同一作品并得到平台 ID。
 3. **B级**：页面跳转到成功页，同时出现成功/审核中状态。
-4. **C级**：只出现 Toast 或按钮状态变化。
+4. **C级**：只出现 Toast 或按钮状态变化，不能单独标记 `published`。
 5. **未知**：点击后没有足够证据，进入 `needs_attention`。
 
 最终 `PublishReceipt` 示例：
@@ -641,7 +636,7 @@ widecast/
 
 已完成任务：
 
-- ✅ 完整状态机（draft/queued/uploading/publishing/verifying/done/needs_attention/retryable_failed/terminal_failed/cancelled）
+- ✅ 完整状态机（draft/scheduled/queued/uploading/submitting/verifying/published/needs_attention/retryable_failed/terminal_failed/cancelled）
 - ✅ 发布凭证系统（PublishReceipt + A/B/C 证明等级）
 - ✅ 幂等防重复机制（SHA-256 幂等键）
 - ✅ 平台能力分级（login/video/imageText/article/verify）
@@ -660,12 +655,17 @@ widecast/
 - ✅ 实现 PublishReceipt、证据等级、网络/DOM 证据
 - ✅ 实现幂等键、reconcile 和安全重试
 - ✅ 修复标题输入未清空、动态 input、慢上传等问题
+- ✅ 统一 `submitting/published` 状态和旧任务迁移
+- ✅ 修复已发布任务幂等检查、提交后安全重试和账号级串行
+- ✅ 统一素材字段校验；Toast/点击失败不再直接误报成功
+- ✅ 本地 HTTP 服务 token 认证，构建产出 `lib/server.js`
 
 待完成任务：
 
-- ⏳ 连续 20 次草稿/测试发布无重复验证
-- ⏳ 所有任务都有明确 Receipt 或 needs_attention 证据包验证
-- ⏳ 视频与图文的测试夹具
+- ⏳ 连续 20 次抖音草稿/测试发布无重复验证
+- ⏳ 所有真实任务都有 A/B Receipt 或 `needs_attention` 证据包
+- ⏳ 抖音视频与图文脱敏页面夹具、上传进度和发布接口响应测试
+- ⏳ 在获得真实发布授权后完成一次受控回归，不纳入公共 CI
 
 ### Phase 2：Worker + SQLite（4–7 天）
 
@@ -765,12 +765,15 @@ widecast/
 - ✅ `src/publish.ts`：响应监听 + 结果验证 + Receipt + 安全重试
 - ✅ `src/tasks.ts`：幂等检查 + 重试机制 + 需要关注状态
 - ✅ `src/client/index.tsx`：支持新状态类型 + Receipt 显示 + 重试/取消按钮
+- ✅ `src/auth.ts`：本地服务 token 生成与读取
+- ✅ `tsdown.config.ts`：构建独立服务入口 `lib/server.js`
 
 待完成重构：
 
 - ⏳ `src/service.ts`：账号逻辑、登录探测和删除作品分离
 - ⏳ 迁移到 SQLite（Phase 2）
 - ⏳ 抽取 Worker 和 Adapter SDK（Phase 2）
+- ⏳ 每账号独立 profile 与多账号数据模型（当前仍是一平台一个默认账号）
 
 删除或隔离：
 

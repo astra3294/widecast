@@ -31,6 +31,21 @@ export default defineConfig([
     },
   },
   {
+    name: 'widecast/server',
+    entry: { server: 'src/server.ts' },
+    outDir: 'lib',
+    format: 'esm',
+    platform: 'node',
+    target: 'es2024',
+    dts: false,
+    clean: false,
+    external: ['playwright'],
+    outputOptions: {
+      entryFileNames: '[name].js',
+      chunkFileNames: 'chunks/[name]-[hash].js',
+    },
+  },
+  {
     name: 'widecast/client',
     entry: { client: 'src/client/index.tsx' },
     outDir: 'lib',

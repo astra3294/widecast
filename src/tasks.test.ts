@@ -2,7 +2,7 @@
  * tasks.ts 单元测试：TaskStore 的 CRUD、幂等防重复、重试、取消和统计。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { TaskStore, type PublishInput } from './tasks.js'
@@ -51,6 +51,24 @@ describe('TaskStore.create', () => {
     store.create('douyin', VIDEO_INPUT)
     const { isDuplicate } = store.create('douyin', VIDEO_INPUT)
     expect(isDuplicate).toBe(true)
+  })
+
+  it('已发布后再次创建相同输入仍返回原任务，防止重复发布', () => {
+    const { task: created } = store.create('douyin', VIDEO_INPUT)
+    store.update(created.id, { status: 'uploading' })
+    store.update(created.id, { status: 'submitting' })
+    store.update(created.id, { status: 'published', receipt: { proofLevel: 'A', evidence: ['test'] } })
+    const duplicate = store.create('douyin', VIDEO_INPUT)
+    expect(duplicate.isDuplicate).toBe(true)
+    expect(duplicate.task.id).toBe(created.id)
+  })
+
+  it('重复查询先于素材文件检查，素材移走后仍能找到已发布任务', () => {
+    const { task: created } = store.create('douyin', VIDEO_INPUT)
+    store.update(created.id, { status: 'uploading' })
+    store.update(created.id, { status: 'submitting' })
+    store.update(created.id, { status: 'published', receipt: { proofLevel: 'A', evidence: ['test'] } })
+    expect(store.findDuplicate('douyin', VIDEO_INPUT)?.id).toBe(created.id)
   })
 
   it('不同平台不重复', () => {
@@ -105,20 +123,29 @@ describe('TaskStore.update', () => {
     expect(updated?.updatedAt).toBeGreaterThanOrEqual(created.updatedAt)
   })
 
-  it('更新时自动设置 submittedAt', () => {
+  it('进入验证时自动设置 submittedAt', () => {
     const { task: created } = store.create('douyin', VIDEO_INPUT)
-    const updated = store.update(created.id, { status: 'publishing' })
-    expect(updated?.submittedAt).toBeTruthy()
+    store.update(created.id, { status: 'uploading' })
+    const updated = store.update(created.id, { status: 'submitting' })
+    expect(updated?.submittedAt).toBeUndefined()
+    const verifying = store.update(created.id, { status: 'verifying' })
+    expect(verifying?.submittedAt).toBeTruthy()
   })
 
   it('更新到终态时自动设置 completedAt', () => {
     const { task: created } = store.create('douyin', VIDEO_INPUT)
-    const updated = store.update(created.id, { status: 'done' })
+    store.update(created.id, { status: 'uploading' })
+    store.update(created.id, { status: 'submitting' })
+    const updated = store.update(created.id, {
+      status: 'published',
+      receipt: { proofLevel: 'A', evidence: ['test'] },
+    })
+    expect(updated?.status).toBe('published')
     expect(updated?.completedAt).toBeTruthy()
   })
 
   it('更新不存在的任务返回 undefined', () => {
-    expect(store.update('nonexistent', { status: 'done' })).toBeUndefined()
+    expect(store.update('nonexistent', { status: 'published', receipt: { proofLevel: 'A', evidence: [] } })).toBeUndefined()
   })
 })
 
@@ -127,7 +154,8 @@ describe('TaskStore.update', () => {
 describe('TaskStore.markNeedsAttention', () => {
   it('标记为 needs_attention 并附带 receipt', () => {
     const { task: created } = store.create('douyin', VIDEO_INPUT)
-    store.update(created.id, { status: 'publishing' })
+    store.update(created.id, { status: 'uploading' })
+    store.update(created.id, { status: 'submitting' })
     const result = store.markNeedsAttention(created.id, '无法确认', {
       proofLevel: 'unknown',
       evidence: ['toast'],
@@ -154,14 +182,18 @@ describe('TaskStore.retry', () => {
   it('needs_attention 状态可重试', () => {
     const { task: created } = store.create('douyin', VIDEO_INPUT)
     store.markNeedsAttention(created.id, '不确定')
-    const result = store.retry(created.id)
+    const blocked = store.retry(created.id)
+    expect(blocked.ok).toBe(false)
+    const result = store.retry(created.id, { confirmedNoPublication: true })
     expect(result.ok).toBe(true)
     expect(result.task?.status).toBe('queued')
   })
 
-  it('done 状态不可重试', () => {
+  it('published 状态不可重试', () => {
     const { task: created } = store.create('douyin', VIDEO_INPUT)
-    store.update(created.id, { status: 'done' })
+    store.update(created.id, { status: 'uploading' })
+    store.update(created.id, { status: 'submitting' })
+    store.update(created.id, { status: 'published', receipt: { proofLevel: 'A', evidence: ['test'] } })
     const result = store.retry(created.id)
     expect(result.ok).toBe(false)
   })
@@ -177,8 +209,10 @@ describe('TaskStore.retry', () => {
   it('重试时清除之前的 receipt', () => {
     const { task: created } = store.create('douyin', VIDEO_INPUT)
     store.markNeedsAttention(created.id, '不确定', { proofLevel: 'C', evidence: ['x'] })
-    const result = store.retry(created.id)
+    const result = store.retry(created.id, { confirmedNoPublication: true, reason: '已检查内容列表' })
     expect(result.task?.receipt).toBeUndefined()
+    expect(result.task?.retryHistory).toHaveLength(1)
+    expect(result.task?.retryHistory[0]?.reason).toBe('已检查内容列表')
   })
 })
 
@@ -194,9 +228,11 @@ describe('TaskStore.cancel', () => {
     expect(task?.completedAt).toBeTruthy()
   })
 
-  it('done 状态不可取消', () => {
+  it('published 状态不可取消', () => {
     const { task: created } = store.create('douyin', VIDEO_INPUT)
-    store.update(created.id, { status: 'done' })
+    store.update(created.id, { status: 'uploading' })
+    store.update(created.id, { status: 'submitting' })
+    store.update(created.id, { status: 'published', receipt: { proofLevel: 'A', evidence: ['test'] } })
     const result = store.cancel(created.id)
     expect(result.ok).toBe(false)
   })
@@ -216,14 +252,16 @@ describe('TaskStore.stats', () => {
     store.create('douyin', VIDEO_INPUT)
     store.create('douyin', IMAGE_INPUT)
     const { task: created3 } = store.create('bilibili', VIDEO_INPUT)
-    store.update(created3.id, { status: 'done' })
+    store.update(created3.id, { status: 'uploading' })
+    store.update(created3.id, { status: 'submitting' })
+    store.update(created3.id, { status: 'published', receipt: { proofLevel: 'A', evidence: ['test'] } })
 
     const stats = store.stats()
     expect(stats.total).toBe(3)
     expect(stats.byPlatform['douyin']).toBe(2)
     expect(stats.byPlatform['bilibili']).toBe(1)
     expect(stats.byStatus['queued']).toBe(2)
-    expect(stats.byStatus['done']).toBe(1)
+    expect(stats.byStatus['published']).toBe(1)
   })
 })
 
@@ -242,5 +280,23 @@ describe('TaskStore 持久化', () => {
     const store2 = new TaskStore(tmpDir)
     const { isDuplicate } = store2.create('douyin', VIDEO_INPUT)
     expect(isDuplicate).toBe(true)
+  })
+
+  it('读取旧版 publishing/done 任务时迁移到 submitting/published', () => {
+    writeFileSync(join(tmpDir, 'tasks.json'), JSON.stringify([{
+      id: 'legacy-task',
+      platform: 'douyin',
+      input: { title: '旧任务', videoPath: '/tmp/legacy.mp4' },
+      status: 'done',
+      step: 'verified',
+      retryCount: 0,
+      maxRetries: 2,
+      createdAt: 1,
+      updatedAt: 1,
+    }]))
+    const migrated = new TaskStore(tmpDir).get('legacy-task')
+    expect(migrated?.status).toBe('published')
+    expect(migrated?.accountId).toBe('douyin')
+    expect(migrated?.retryHistory).toEqual([])
   })
 })

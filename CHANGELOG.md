@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-08-18
+
+### Fixed
+- **任务状态规范化**：使用 `submitting` / `published` / `scheduled` 等业务状态，并兼容迁移旧任务中的 `publishing` / `done`。
+- **幂等防重复**：已发布、已提交但结果不确定、排队中或失败待重试的同键任务都会阻止新建任务；只有明确提交前终止的任务允许重新创建。
+- **结果验证**：点击失败不再伪报成功；仅有 Toast 的 C 级证据进入 `needs_attention`，需要内容列表或更强凭证才能标记 `published`。
+- **输入校验**：发布入口统一校验标题、绝对素材路径、视频/图文互斥、图片和封面存在性。
+- **任务恢复安全**：提交后的异常进入 `needs_attention`，重试必须明确确认平台没有作品，并记录重试历史。
+
+### Added
+- DSH 工具 `widecast_retry_task`、`widecast_cancel_task`、`widecast_logout_account`。
+- 独立服务本地 token 认证；构建产物增加 `lib/server.js`，可通过 `pnpm serve:prod` 启动。
+- 同一账号任务串行队列，避免并发页面争用登录会话。
+- 插件工具注册、平台能力、token 和弱证明结果的自动化测试。
+
+### Changed
+- 小红书暂降为“仅登录”，在完成真实账号/草稿验收前不再宣称支持图文发布。
+
 ## [0.4.1] - 2026-08-20
 
 ### Fixed

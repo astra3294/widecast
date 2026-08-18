@@ -227,7 +227,7 @@ export function apply(ctx: HostContext): void {
 
   ctx.tools.register({
     name: 'widecast_remove_account',
-    description: '移除某平台的账号记录（登出并关闭其浏览器档案）。',
+    description: '移除某平台的账号记录并关闭浏览器上下文；不会自动删除本地会话档案。需要彻底清除会话时使用 widecast_logout_account。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -250,6 +250,34 @@ export function apply(ctx: HostContext): void {
     },
     async execute(args) {
       return client.call('accounts.remove', { platform: String(args.platform) })
+    },
+  })
+
+  ctx.tools.register({
+    name: 'widecast_logout_account',
+    description: '彻底登出并删除指定平台的本地浏览器会话档案。该操作会清除本机登录状态，执行前应获得用户明确确认。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        platform: { type: 'string', description: '平台 id', enum: PLATFORM_IDS },
+      },
+      required: ['platform'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean' },
+          message: { type: 'string' },
+        },
+        required: ['ok', 'message'],
+      },
+      render: renderJson,
+    },
+    async execute(args) {
+      return client.call('accounts.logout', { platform: String(args.platform) })
     },
   })
 
@@ -287,12 +315,13 @@ export function apply(ctx: HostContext): void {
   ctx.tools.register({
     name: 'widecast_publish',
     description:
-      '发布一篇内容（视频或图文）到指定平台。浏览器模式：在真人登录过的真实浏览器里自动完成上传与发布，提交后返回任务 id，用 widecast_get_task_status 查询进度。videoPath/imagePaths 必须是本机绝对路径。支持幂等防重复：相同内容不会重复发布。',
+      '发布一篇内容（视频或图文）到指定平台。浏览器模式：在真人登录过的真实浏览器里自动完成上传与发布，提交后返回任务 id，用 widecast_get_task_status 查询进度。videoPath/imagePaths 必须是本机绝对路径。支持幂等防重复：已发布或结果不确定的相同内容不会创建新任务。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         platform: { type: 'string', description: '平台 id', enum: PLATFORM_IDS },
+        accountId: { type: 'string', description: '目标账号 id；当前版本每个平台默认使用一个账号（可省略）' },
         title: { type: 'string', description: '标题' },
         description: { type: 'string', description: '简介/正文（可选）' },
         videoPath: { type: 'string', description: '视频文件绝对路径（可选）' },
@@ -316,7 +345,7 @@ export function apply(ctx: HostContext): void {
             properties: {
               id: { type: 'string' },
               platform: { type: 'string' },
-              status: { type: 'string' },
+              status: { type: 'string', enum: ['draft', 'scheduled', 'queued', 'uploading', 'submitting', 'verifying', 'published', 'needs_attention', 'retryable_failed', 'terminal_failed', 'cancelled'] },
               step: { type: 'string' },
               message: { type: 'string' },
               receipt: {
@@ -325,7 +354,9 @@ export function apply(ctx: HostContext): void {
                 properties: {
                   platformPublicationId: { type: 'string' },
                   url: { type: 'string' },
-                  proofLevel: { type: 'string' },
+                  proofLevel: { type: 'string', enum: ['A', 'B', 'C', 'unknown'] },
+                  verificationMethod: { type: 'string' },
+                  responseUrl: { type: 'string' },
                   evidence: { type: 'array', items: { type: 'string' } },
                 },
               },
@@ -351,7 +382,7 @@ export function apply(ctx: HostContext): void {
 
   ctx.tools.register({
     name: 'widecast_get_task_status',
-    description: '查询发布任务的进度（排队中/上传中/发布中/验证中/完成/失败及原因）。taskId 来自 widecast_publish。',
+    description: '查询发布任务的进度（排队中/上传中/提交中/验证中/已发布/需要关注/失败及原因）。taskId 来自 widecast_publish。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -371,7 +402,8 @@ export function apply(ctx: HostContext): void {
             properties: {
               id: { type: 'string' },
               platform: { type: 'string' },
-              status: { type: 'string' },
+              accountId: { type: 'string' },
+              status: { type: 'string', enum: ['draft', 'scheduled', 'queued', 'uploading', 'submitting', 'verifying', 'published', 'needs_attention', 'retryable_failed', 'terminal_failed', 'cancelled'] },
               step: { type: 'string' },
               message: { type: 'string' },
               receipt: {
@@ -380,11 +412,14 @@ export function apply(ctx: HostContext): void {
                 properties: {
                   platformPublicationId: { type: 'string' },
                   url: { type: 'string' },
-                  proofLevel: { type: 'string' },
+                  proofLevel: { type: 'string', enum: ['A', 'B', 'C', 'unknown'] },
+                  verificationMethod: { type: 'string' },
+                  responseUrl: { type: 'string' },
                   evidence: { type: 'array', items: { type: 'string' } },
                 },
               },
               retryCount: { type: 'number' },
+              retryHistory: { type: 'array' },
               createdAt: { type: 'number' },
               updatedAt: { type: 'number' },
             },
@@ -397,6 +432,68 @@ export function apply(ctx: HostContext): void {
     },
     async execute(args) {
       return client.getTaskStatus(String(args.taskId))
+    },
+  })
+
+  ctx.tools.register({
+    name: 'widecast_retry_task',
+    description: '重试一个发布任务。提交前失败可直接重试；如果任务处于 needs_attention，必须明确确认平台内容列表中没有该作品，避免重复发布。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        taskId: { type: 'string', description: '任务 id' },
+        confirmedNoPublication: { type: 'boolean', description: '已人工确认平台内容列表中没有该作品；不确定时必须为 false' },
+        reason: { type: 'string', description: '重试原因（可选）' },
+      },
+      required: ['taskId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean' },
+          message: { type: 'string' },
+          task: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { id: { type: 'string' }, status: { type: 'string' } },
+            required: ['id', 'status'],
+          },
+        },
+        required: ['ok'],
+      },
+      render: renderJson,
+    },
+    async execute(args) {
+      return client.retryTask(
+        String(args.taskId),
+        args.confirmedNoPublication === true,
+      )
+    },
+  })
+
+  ctx.tools.register({
+    name: 'widecast_cancel_task',
+    description: '取消一个尚未执行中的发布任务。上传、提交或验证中的任务不会被强制中断。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { taskId: { type: 'string', description: '任务 id' } },
+      required: ['taskId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { ok: { type: 'boolean' }, message: { type: 'string' } },
+        required: ['ok'],
+      },
+      render: renderJson,
+    },
+    async execute(args) {
+      return client.cancelTask(String(args.taskId))
     },
   })
 }

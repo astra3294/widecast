@@ -7,10 +7,12 @@
  * - 支持热重载
  * - 独立进程，更稳定
  */
+import { timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { WIDECAST_VERSION, RPC_CHANNEL } from './constants.js'
+import { getOrCreateServerToken } from './auth.js'
 import { PLATFORMS } from './platforms.js'
 import { PublishService } from './publish.js'
 import { WidecastService } from './service.js'
@@ -18,6 +20,7 @@ import { TaskStore } from './tasks.js'
 
 const PORT = parseInt(process.env.WIDECAST_PORT ?? '18080', 10)
 const HOST = process.env.WIDECAST_HOST ?? '127.0.0.1'
+const MAX_REQUEST_BYTES = 1_000_000
 
 function baseDir(): string {
   const override = process.env.WIDECAST_HOME
@@ -45,6 +48,7 @@ async function handleRequest(
   service: WidecastService,
   publishService: PublishService,
   tasks: TaskStore,
+  authToken: string,
 ): Promise<void> {
   // CORS 头
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -57,6 +61,12 @@ async function handleRequest(
     return
   }
 
+  if (!hasValidToken(req, authToken)) {
+    res.writeHead(401, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: false, error: 'Unauthorized' }))
+    return
+  }
+
   if (req.method !== 'POST') {
     res.writeHead(405, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ ok: false, error: 'Method not allowed' }))
@@ -66,6 +76,11 @@ async function handleRequest(
   let body = ''
   for await (const chunk of req) {
     body += chunk
+    if (Buffer.byteLength(body, 'utf8') > MAX_REQUEST_BYTES) {
+      res.writeHead(413, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: 'Request body too large' }))
+      return
+    }
   }
 
   try {
@@ -115,7 +130,8 @@ async function handleEndpoint(
       return { ok: true, value: { accounts: service.listAccounts() } }
     case 'accounts.add': {
       const platform = typeof payload.platform === 'string' ? payload.platform : ''
-      const waitMs = typeof payload.waitMs === 'number' ? payload.waitMs : 0
+      const requestedWaitMs = typeof payload.waitMs === 'number' ? payload.waitMs : 0
+      const waitMs = Math.min(Math.max(requestedWaitMs, 0), 300_000)
       return { ok: true, value: await service.addAccount(platform, { waitMs }) }
     }
     case 'accounts.check': {
@@ -162,7 +178,9 @@ async function handleEndpoint(
     }
     case 'publish.retry': {
       const taskId = typeof payload.taskId === 'string' ? payload.taskId : ''
-      return { ok: true, value: publishService.retry(taskId) }
+      const confirmedNoPublication = payload.confirmedNoPublication === true
+      const reason = typeof payload.reason === 'string' ? payload.reason : undefined
+      return { ok: true, value: publishService.retry(taskId, { confirmedNoPublication, reason }) }
     }
     case 'publish.cancel': {
       const taskId = typeof payload.taskId === 'string' ? payload.taskId : ''
@@ -176,12 +194,14 @@ async function handleEndpoint(
 }
 
 async function main(): Promise<void> {
-  const service = new WidecastService(baseDir())
-  const tasks = new TaskStore(baseDir())
+  const dataDirectory = baseDir()
+  const authToken = getOrCreateServerToken(dataDirectory)
+  const service = new WidecastService(dataDirectory)
+  const tasks = new TaskStore(dataDirectory)
   const publishService = new PublishService(service.browser, tasks)
 
   const server = createServer((req, res) => {
-    void handleRequest(req, res, service, publishService, tasks)
+    void handleRequest(req, res, service, publishService, tasks, authToken)
   })
 
   server.listen(PORT, HOST, () => {
@@ -206,3 +226,12 @@ main().catch((err) => {
   console.error('Widecast 服务启动失败:', err)
   process.exit(1)
 })
+
+function hasValidToken(req: IncomingMessage, expected: string): boolean {
+  const header = req.headers['x-widecast-token']
+  const provided = Array.isArray(header) ? header[0] : header
+  if (provided === undefined) return false
+  const actualBuffer = Buffer.from(provided)
+  const expectedBuffer = Buffer.from(expected)
+  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer)
+}

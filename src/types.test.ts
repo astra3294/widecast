@@ -10,6 +10,7 @@ import {
   isTerminalStatus,
   isRetryableStatus,
   isRunningStatus,
+  hasSubmissionEvidence,
 } from './types.js'
 
 // ─── computeContentFingerprint ──────────────────────────────────────────────
@@ -43,6 +44,12 @@ describe('computeContentFingerprint', () => {
   it('标签顺序影响指纹', () => {
     const a = computeContentFingerprint({ title: '测试', tags: ['A', 'B'] })
     const b = computeContentFingerprint({ title: '测试', tags: ['B', 'A'] })
+    expect(a).not.toBe(b)
+  })
+
+  it('正文和封面变化会影响指纹', () => {
+    const a = computeContentFingerprint({ title: '测试', videoPath: '/tmp/a.mp4', description: 'A', coverPath: '/tmp/a.jpg' })
+    const b = computeContentFingerprint({ title: '测试', videoPath: '/tmp/a.mp4', description: 'B', coverPath: '/tmp/b.jpg' })
     expect(a).not.toBe(b)
   })
 
@@ -88,8 +95,8 @@ describe('computeIdempotencyKey', () => {
 // ─── isTerminalStatus ──────────────────────────────────────────────────────
 
 describe('isTerminalStatus', () => {
-  const terminal: TaskStatus[] = ['done', 'terminal_failed', 'cancelled']
-  const nonTerminal: TaskStatus[] = ['draft', 'queued', 'uploading', 'publishing', 'verifying', 'needs_attention', 'retryable_failed']
+  const terminal: TaskStatus[] = ['published', 'terminal_failed', 'cancelled']
+  const nonTerminal: TaskStatus[] = ['draft', 'scheduled', 'queued', 'uploading', 'submitting', 'verifying', 'needs_attention', 'retryable_failed']
 
   for (const status of terminal) {
     it(`${status} 是终态`, () => {
@@ -115,8 +122,8 @@ describe('isRetryableStatus', () => {
     expect(isRetryableStatus('needs_attention')).toBe(true)
   })
 
-  it('done 不可重试', () => {
-    expect(isRetryableStatus('done')).toBe(false)
+  it('published 不可重试', () => {
+    expect(isRetryableStatus('published')).toBe(false)
   })
 
   it('terminal_failed 不可重试', () => {
@@ -135,8 +142,8 @@ describe('isRunningStatus', () => {
     expect(isRunningStatus('uploading')).toBe(true)
   })
 
-  it('publishing 是运行中', () => {
-    expect(isRunningStatus('publishing')).toBe(true)
+  it('submitting 是运行中', () => {
+    expect(isRunningStatus('submitting')).toBe(true)
   })
 
   it('verifying 是运行中', () => {
@@ -147,7 +154,18 @@ describe('isRunningStatus', () => {
     expect(isRunningStatus('queued')).toBe(false)
   })
 
-  it('done 不是运行中', () => {
-    expect(isRunningStatus('done')).toBe(false)
+  it('published 不是运行中', () => {
+    expect(isRunningStatus('published')).toBe(false)
+  })
+})
+
+describe('hasSubmissionEvidence', () => {
+  it('提交中或已有提交时间视为已进入不可自动重发阶段', () => {
+    expect(hasSubmissionEvidence({ status: 'submitting', submittedAt: undefined })).toBe(true)
+    expect(hasSubmissionEvidence({ status: 'retryable_failed', submittedAt: 1 })).toBe(true)
+  })
+
+  it('仅上传失败且没有提交时间不视为已提交', () => {
+    expect(hasSubmissionEvidence({ status: 'retryable_failed', submittedAt: undefined })).toBe(false)
   })
 })

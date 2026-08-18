@@ -29,6 +29,8 @@ DSH ←→ Widecast 客户端（src/index.ts）←→ Widecast 独立服务（sr
 - 支持热重载（pnpm serve:dev）
 ```
 
+服务默认只监听 `127.0.0.1`，并在 `WIDECAST_HOME/server-token` 自动生成本地访问 token；token 只在本机 HTTP 请求头中传递，不会进入 Agent 返回值。生产构建完成后也可以使用 `pnpm serve:prod` 启动 `lib/server.js`。
+
 ## 安装
 
 ```bash
@@ -60,20 +62,23 @@ pnpm serve:dev
 # 构建
 pnpm check
 
+# 使用已构建的独立服务
+pnpm serve:prod
+
 # 测试
 pnpm test
 ```
 
 ## 核心能力
 
-### 发布闭环（v0.3.0 — 抖音已实测验证）
+### 发布闭环（v0.5.0 — 抖音主链持续硬化）
 
-- **完整状态机**：draft → queued → uploading → publishing → verifying → done / needs_attention / retryable_failed / terminal_failed
-- **幂等防重复**：SHA-256 幂等键（account + platform + content-fingerprint + time-bucket），相同内容不会重复发布
+- **业务状态机**：draft / scheduled → queued → uploading → submitting → verifying → published；未知结果进入 `needs_attention`，失败区分 `retryable_failed` / `terminal_failed`，并支持 cancelled
+- **幂等防重复**：SHA-256 幂等键（account + platform + content-fingerprint + time-bucket）；已发布、已提交但结果不确定和待重试任务不会创建同键新任务
 - **发布凭证（Receipt）**：A/B/C 三级证明（网络响应 / 成功提示 / 内容列表确认），每次发布都有可验证的结果
-- **安全重试**：retryable_failed 和 needs_attention 状态支持手动重试，不会自动重复发布
+- **安全重试**：提交后的 `needs_attention` 任务必须明确确认平台没有作品，才允许再次提交，并记录重试历史
 - **响应监听**：点击发布前注册响应监听，不立即离开发布页，确保捕获平台返回
-- **抖音反检测**：禁用 AutomationControlled + CDP 修复安全 SDK `__name` 冲突
+- **抖音页面链路**：Playwright DOM/ARIA + CDP 结构化回退；不依赖模型视觉或截图识别
 
 ### 平台能力分级
 
@@ -82,7 +87,7 @@ pnpm test
 | 平台 | 登录 | 视频发布 | 图文发布 | 结果验证 |
 |------|------|----------|----------|----------|
 | 抖音 | ✅ | ✅ (实测) | ✅ (实测) | ✅ (B级凭证) |
-| 小红书 | ✅ | - | 🔧 (框架就绪) | - |
+| 小红书 | ✅ | - | - (未通过发布验收) | - |
 | B站 | ✅ | - | - | - |
 | 快手 | ✅ | - | - | - |
 | 视频号 | ✅ | - | - | - |
@@ -101,6 +106,9 @@ pnpm test
 - `widecast_remove_account` — 移除账号
 - `widecast_publish` — 发布内容（支持幂等防重复）
 - `widecast_get_task_status` — 查询任务状态和 Receipt
+- `widecast_retry_task` — 安全重试任务（结果不确定时要求显式确认）
+- `widecast_cancel_task` — 取消尚未执行的任务
+- `widecast_logout_account` — 明确确认后清除本地会话
 
 ## 结构
 
@@ -112,6 +120,7 @@ src/browser.ts        浏览器管理：每平台独立档案
 src/publish.ts        发布服务：响应监听 + 结果验证 + Receipt
 src/service.ts        账号服务：登录探测 + 健康检查
 src/tasks.ts          任务存储：状态持久化 + 幂等检查
+src/auth.ts           本地服务 token 认证
 src/accounts.ts       账号存储：JSON 文件
 src/client/index.tsx  客户端半边：管理面板 UI
 cordis.patch.yml      插件 insert 补丁
@@ -131,11 +140,12 @@ WIDECAST_DEV=1 dsh --profile web
 
 ## 路线图
 
-- **P0（已完成）** 插件链路：入口 / 面板 / RPC / 工具 / CI / 发布闭环
-- **P1（进行中）** 平台扩展：小红书 / B站 / 视频号 / 快手
-- **P2** Worker + SQLite：DSH 重启不影响上传和定时任务
-- **P3** 数据面板：阅读 / 互动 / 粉丝回读 / 草稿箱 / 设置
-- **P4** 产品化：安装器 / 自动更新 / 数据备份 / 团队协作
+- **P0（已完成）** 插件链路：入口 / 面板 / RPC / 工具 / 本地认证 / 构建产物
+- **P1（进行中）** 抖音可靠发布：真实页面验证、草稿/测试闭环、凭证和恢复验收
+- **P2（待开始）** 多账号与持久 Worker：账号级 profile、SQLite、定时任务和恢复
+- **P3（待开始）** 平台扩展：小红书 / B站 / 视频号 / 快手（逐个平台独立验收）
+- **P4（待开始）** 数据面板：阅读 / 互动 / 粉丝回读 / 草稿箱 / 设置
+- **P5（待开始）** 产品化：安装器 / 自动更新 / 数据备份 / 团队协作
 
 ## 免责声明
 
