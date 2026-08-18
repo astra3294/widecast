@@ -2,7 +2,7 @@
  * publish.ts 单元测试：validatePublishInput 函数。
  */
 import { describe, it, expect } from 'vitest'
-import { validatePublishInput, type PublishInput } from './publish.js'
+import { isSufficientProof, validatePublishInput, type PublishInput } from './publish.js'
 
 describe('validatePublishInput', () => {
   it('标题为空返回错误', () => {
@@ -31,14 +31,26 @@ describe('validatePublishInput', () => {
     expect(result).toContain('视频文件不存在')
   })
 
-  it('仅有 imagePaths 和 title 通过结构校验', () => {
-    // validatePublishInput 不检查图片文件存在性
+  it('不存在的图片路径返回明确错误', () => {
     const result = validatePublishInput({
       title: '图文标题',
       imagePaths: ['/nonexistent/a.jpg'],
     })
-    // 结构校验通过（返回 null）
-    expect(result).toBeNull()
+    expect(result).toContain('图片文件不存在')
+  })
+
+  it('视频和图片同时提供时拒绝歧义输入', () => {
+    const result = validatePublishInput({
+      title: '混合内容',
+      videoPath: '/nonexistent/video.mp4',
+      imagePaths: ['/nonexistent/a.jpg'],
+    })
+    expect(result).toContain('只能二选一')
+  })
+
+  it('相对路径被拒绝', () => {
+    const result = validatePublishInput({ title: '标题', videoPath: 'video.mp4' })
+    expect(result).toContain('绝对路径')
   })
 })
 
@@ -62,5 +74,17 @@ describe('PublishInput 类型', () => {
       tags: ['标签1', '标签2'],
     }
     expect(input.tags).toHaveLength(2)
+  })
+})
+
+describe('发布证明等级', () => {
+  it('A/B 级证明可以进入 published', () => {
+    expect(isSufficientProof({ proofLevel: 'A', evidence: ['network-response'] })).toBe(true)
+    expect(isSufficientProof({ proofLevel: 'B', evidence: ['url-redirect'] })).toBe(true)
+  })
+
+  it('仅 Toast 的 C 级证明必须人工确认', () => {
+    expect(isSufficientProof({ proofLevel: 'C', evidence: ['success-toast'] })).toBe(false)
+    expect(isSufficientProof({ proofLevel: 'unknown', evidence: [] })).toBe(false)
   })
 })

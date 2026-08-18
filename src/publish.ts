@@ -10,12 +10,18 @@
  * 6. 实现 PublishReceipt、证据等级和幂等防重复。
  */
 import { existsSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { isAbsolute } from 'node:path'
 import type { Page, Response as PwResponse } from 'playwright'
 import { BrowserManager } from './browser.js'
 import { findPlatform, hasCapability, type PlatformDef, type PublishPlan } from './platforms.js'
 import { detectLoggedIn } from './service.js'
-import { TaskStore, type PublishInput, type PublishTask, type PublishReceipt } from './tasks.js'
+import {
+  TaskStore,
+  type PublishInput,
+  type PublishTask,
+  type PublishReceipt,
+} from './tasks.js'
+import { hasSubmissionEvidence, isTerminalStatus } from './types.js'
 
 export type { PublishInput, PublishTask, PublishReceipt }
 
@@ -23,6 +29,7 @@ export type { PublishInput, PublishTask, PublishReceipt }
 
 export class PublishService {
   private readonly running = new Set<string>()
+  private readonly accountQueues = new Map<string, Promise<void>>()
 
   constructor(
     private readonly browser: BrowserManager,
@@ -67,6 +74,9 @@ export class PublishService {
     const platform = findPlatform(platformId)
     if (platform === undefined) return { ok: false, message: `未知平台：${platformId}` }
 
+    const validationError = validatePublishInput(input, { checkFiles: false })
+    if (validationError !== null) return { ok: false, message: validationError }
+
     // 检查平台是否支持发布
     const isImage = input.imagePaths !== undefined && input.imagePaths.length > 0
     const capability = isImage ? 'imageText' : 'video'
@@ -74,23 +84,24 @@ export class PublishService {
       return { ok: false, message: `${platform.name} 尚未支持${isImage ? '图文' : '视频'}发布（当前仅支持：${platform.capabilities.join(', ')}）` }
     }
 
-    if (platform.publish === undefined) {
+    const plan = isImage ? (platform.publishImage ?? platform.publish) : platform.publish
+    if (plan === undefined) {
       return { ok: false, message: `${platform.name} 的发布流程尚未实现` }
     }
 
-    // 验证文件存在
-    if (input.videoPath !== undefined && !existsSync(input.videoPath)) {
-      return { ok: false, message: `视频文件不存在：${input.videoPath}` }
+    const accountId = options.accountId ?? platformId
+    const duplicate = this.tasks.findDuplicate(platformId, input, { accountId })
+    if (duplicate !== undefined) {
+      return { ok: true, task: duplicate, isDuplicate: true, message: '已存在相同内容的发布任务' }
     }
-    if (input.imagePaths !== undefined) {
-      for (const p of input.imagePaths) {
-        if (!existsSync(p)) return { ok: false, message: `图片文件不存在：${p}` }
-      }
-    }
+
+    // 只有确认不是重复任务后，才要求素材当前仍存在。
+    const fileValidationError = validatePublishInput(input)
+    if (fileValidationError !== null) return { ok: false, message: fileValidationError }
 
     // 创建任务（带幂等检查）
     const { task, isDuplicate } = this.tasks.create(platformId, input, {
-      accountId: options.accountId ?? platformId,
+      accountId,
     })
 
     if (isDuplicate) {
@@ -101,9 +112,12 @@ export class PublishService {
     return { ok: true, task }
   }
 
-  /** 重试任务。 */
-  retry(taskId: string): { ok: boolean; task?: PublishTask; message?: string } {
-    const result = this.tasks.retry(taskId)
+  /** 重试任务；提交后的不确定任务必须显式确认没有作品。 */
+  retry(
+    taskId: string,
+    options: { confirmedNoPublication?: boolean; reason?: string } = {},
+  ): { ok: boolean; task?: PublishTask; message?: string } {
+    const result = this.tasks.retry(taskId, options)
     if (result.ok && result.task !== undefined) {
       void this.run(result.task.id)
     }
@@ -117,13 +131,30 @@ export class PublishService {
 
   // ─── 核心执行逻辑 ──────────────────────────────────────────────────────
 
-  private async run(taskId: string): Promise<void> {
+  private run(taskId: string): void {
+    const task = this.tasks.get(taskId)
+    if (task === undefined) return
+    const queueKey = `${task.platform}\x00${task.accountId}`
+    const previous = this.accountQueues.get(queueKey) ?? Promise.resolve()
+    const current = previous
+      .catch(() => {})
+      .then(() => this.execute(taskId))
+    this.accountQueues.set(queueKey, current)
+    void current.finally(() => {
+      if (this.accountQueues.get(queueKey) === current) this.accountQueues.delete(queueKey)
+    }).catch(() => {})
+  }
+
+  private async execute(taskId: string): Promise<void> {
     if (this.running.has(taskId)) return
     this.running.add(taskId)
+    let responsePage: Page | undefined
+    let responseHandler: ((response: PwResponse) => void) | undefined
 
     try {
       const task = this.tasks.get(taskId)
       if (task === undefined) return
+      if (isTerminalStatus(task.status)) return
 
       const platform = findPlatform(task.platform)
       if (platform === undefined) {
@@ -150,9 +181,9 @@ export class PublishService {
       this.tasks.update(taskId, { status: 'uploading', step: 'login-check' })
       if (!(await detectLoggedIn(platform, this.browser))) {
         this.tasks.update(taskId, {
-          status: 'terminal_failed',
+          status: 'needs_attention',
           step: 'not-logged-in',
-          message: `${platform.name} 未登录：请先登录后再重试`,
+          message: `${platform.name} 未登录：请先完成真人登录后再重试`,
         })
         return
       }
@@ -167,9 +198,9 @@ export class PublishService {
         const blocked = await page.$(platform.probe.blockedBySelectors[0]!).catch(() => null)
         if (blocked !== null) {
           this.tasks.update(taskId, {
-            status: 'terminal_failed',
+            status: 'needs_attention',
             step: 'not-logged-in',
-            message: `${platform.name} 未登录，请先登录`,
+            message: `${platform.name} 未登录，请先完成真人登录`,
           })
           return
         }
@@ -190,17 +221,21 @@ export class PublishService {
 
       // 5) 注册响应监听（在点击发布前）
       const publishResponseCollector = new PublishResponseCollector()
-      const responseHandler = (response: PwResponse): void => {
+      const handler = (response: PwResponse): void => {
         publishResponseCollector.onResponse(response)
       }
-      page.on('response', responseHandler)
+      responseHandler = handler
+      responsePage = page
+      page.on('response', handler)
 
       // 6) 点击发布按钮
-      this.tasks.update(taskId, { status: 'publishing', step: 'submit' })
+      this.tasks.update(taskId, { status: 'submitting', step: 'submit' })
       const editorDump = await dumpEditorState(page).catch(() => ({ url: page.url(), error: 'dump failed' }))
       const clicked = await this.clickPublishButton(page, plan)
       if (!clicked) {
-        page.off('response', responseHandler)
+        page.off('response', handler)
+        responsePage = undefined
+        responseHandler = undefined
         this.tasks.update(taskId, {
           status: 'retryable_failed',
           step: 'submit',
@@ -213,10 +248,12 @@ export class PublishService {
       await this.handleConfirmDialogs(page, plan)
 
       // 7.5) 检测验证码/二次验证（点击发布后立即检查）
-      this.tasks.update(taskId, { status: 'verifying', step: 'check-captcha' })
+      this.tasks.update(taskId, { status: 'verifying', step: 'check-captcha', submittedAt: Date.now() })
       const captchaDetected = await this.detectCaptcha(page)
       if (captchaDetected) {
-        page.off('response', responseHandler)
+        page.off('response', handler)
+        responsePage = undefined
+        responseHandler = undefined
         this.tasks.update(taskId, {
           status: 'needs_attention',
           step: 'captcha-required',
@@ -230,25 +267,27 @@ export class PublishService {
       const receipt = await this.waitForPublishResult(page, platform, plan, task, publishResponseCollector)
 
       // 移除响应监听
-      page.off('response', responseHandler)
+      page.off('response', handler)
+      responsePage = undefined
+      responseHandler = undefined
 
       // 9) 验证结果
       if (receipt !== undefined) {
-        if (receipt.proofLevel === 'A') {
-          // A 级凭证：直接确认
+        if (isSufficientProof(receipt)) {
+          // A/B 级凭证：已达到可确认阈值
           this.tasks.update(taskId, {
-            status: 'done',
+            status: 'published',
             step: 'verified',
-            message: '发布成功（A级凭证）',
+            message: `发布成功（${receipt.proofLevel}级凭证）`,
             receipt,
           })
-        } else if (receipt.proofLevel === 'B') {
-          // B 级凭证：尝试在内容管理页进一步验证以升级到 A 级
+        } else {
+          // C 级或未知凭证：尝试在内容管理页进一步验证以升级到 A 级
           const listReceipt = await this.verifyInContentList(page, platform, task)
           if (listReceipt !== undefined && listReceipt.proofLevel === 'A') {
             // 升级为 A 级：合并凭证
             this.tasks.update(taskId, {
-              status: 'done',
+              status: 'published',
               step: 'verified',
               message: '发布成功（A级凭证：内容管理列表确认）',
               receipt: {
@@ -257,24 +296,16 @@ export class PublishService {
               },
             })
           } else {
-            // 保持 B 级
-            this.tasks.update(taskId, {
-              status: 'done',
-              step: 'verified',
-              message: '发布成功（B级凭证）',
-              receipt,
-            })
+            // 只有 Toast/弱信号不能直接标记发布成功。
+            this.tasks.markNeedsAttention(taskId, '已收到提交信号，但缺少可确认的作品凭证，请人工检查', receipt)
           }
-        } else {
-          // C 级或未知：needs_attention
-          this.tasks.markNeedsAttention(taskId, '发布结果不确定，请人工确认', receipt)
         }
       } else {
         // 没有任何凭证：尝试内容管理页验证
         const listReceipt = await this.verifyInContentList(page, platform, task)
         if (listReceipt !== undefined) {
           this.tasks.update(taskId, {
-            status: 'done',
+            status: 'published',
             step: 'verified',
             message: '已在内容管理列表确认',
             receipt: listReceipt,
@@ -289,13 +320,24 @@ export class PublishService {
       }
     } catch (error) {
       const task = this.tasks.get(taskId)
-      const isRetryable = task !== undefined && task.retryCount < task.maxRetries
-      this.tasks.update(taskId, {
-        status: isRetryable ? 'retryable_failed' : 'terminal_failed',
-        step: 'error',
-        message: String(error),
-      })
+      if (task !== undefined && hasSubmissionEvidence(task)) {
+        this.tasks.markNeedsAttention(taskId, `提交后执行异常，无法确认结果：${String(error)}`, {
+          proofLevel: 'unknown',
+          verificationMethod: 'exception',
+          evidence: ['exception-after-submit'],
+        })
+      } else {
+        const isRetryable = task !== undefined && task.retryCount < task.maxRetries
+        this.tasks.update(taskId, {
+          status: isRetryable ? 'retryable_failed' : 'terminal_failed',
+          step: 'error',
+          message: String(error),
+        })
+      }
     } finally {
+      if (responsePage !== undefined && responseHandler !== undefined) {
+        responsePage.off('response', responseHandler)
+      }
       this.running.delete(taskId)
     }
   }
@@ -466,16 +508,26 @@ export class PublishService {
     for (const text of plan.publishButtonTexts) {
       const exact = page.getByRole('button', { name: text, exact: true })
       if (await exact.count() > 0 && await exact.first().isVisible().catch(() => false)) {
-        await exact.first().click({ timeout: 15_000 }).catch(() => {})
-        return true
+        try {
+          if (await exact.first().isDisabled().catch(() => false)) continue
+          await exact.first().click({ timeout: 15_000 })
+          return true
+        } catch {
+          // 继续尝试下一个语义候选，不把 click 失败误报成已提交。
+        }
       }
     }
     // 兜底：子串匹配
     for (const text of plan.publishButtonTexts) {
       const button = page.locator(`button:has-text("${text}")`).first()
       if (await button.count() > 0 && await button.isVisible().catch(() => false)) {
-        await button.click({ timeout: 15_000 }).catch(() => {})
-        return true
+        try {
+          if (await button.isDisabled().catch(() => false)) continue
+          await button.click({ timeout: 15_000 })
+          return true
+        } catch {
+          // 继续尝试下一个候选。
+        }
       }
     }
     return false
@@ -525,23 +577,27 @@ export class PublishService {
       throw new Error('平台要求验证码或二次验证，请手动完成后重试')
     }
 
-    // 检查是否出现成功提示
-    const successReceipt = await this.checkSuccessToast(page, plan, collector)
-    if (successReceipt !== undefined) return successReceipt
+    // 先检查网络响应，优先保留带作品 ID/URL 的强证据。
+    const responseReceipt = await this.checkCollectedResponses(collector, platform)
+    if (responseReceipt?.proofLevel === 'A') return responseReceipt
 
-    // 检查 URL 是否跳转到成功页
+    // URL 跳转和成功页是次强证据。
     const urlReceipt = await this.checkUrlRedirect(page, platform)
     if (urlReceipt !== undefined) return urlReceipt
 
-    // 检查收集到的响应
-    const responseReceipt = this.checkCollectedResponses(collector, platform)
-    if (responseReceipt !== undefined) return responseReceipt
+    // Toast 只是弱证据；即使先出现，也不能覆盖已经收集的网络证据。
+    const successReceipt = await this.checkSuccessToast(page, plan)
+    if (successReceipt !== undefined) return responseReceipt ?? successReceipt
 
     // 再等一会儿，看看有没有延迟的提示
     await page.waitForTimeout(5000)
 
-    const delayedSuccessReceipt = await this.checkSuccessToast(page, plan, collector)
-    if (delayedSuccessReceipt !== undefined) return delayedSuccessReceipt
+    const delayedResponseReceipt = await this.checkCollectedResponses(collector, platform)
+    if (delayedResponseReceipt?.proofLevel === 'A') return delayedResponseReceipt
+    const delayedSuccessReceipt = await this.checkSuccessToast(page, plan)
+    if (delayedSuccessReceipt !== undefined) return delayedResponseReceipt ?? delayedSuccessReceipt
+
+    if (delayedResponseReceipt !== undefined) return delayedResponseReceipt
 
     return undefined
   }
@@ -593,14 +649,13 @@ export class PublishService {
   }
 
   /** 检查成功提示文本。 */
-  private async checkSuccessToast(
-    page: Page, plan: PublishPlan, collector: PublishResponseCollector,
-  ): Promise<PublishReceipt | undefined> {
+  private async checkSuccessToast(page: Page, plan: PublishPlan): Promise<PublishReceipt | undefined> {
     for (const text of plan.successTexts) {
       const visible = await page.getByText(text, { exact: false }).first().isVisible().catch(() => false)
       if (visible) {
         return {
-          proofLevel: 'B',
+          proofLevel: 'C',
+          verificationMethod: 'success-toast',
           evidence: ['success-toast'],
           rawResponse: `检测到成功提示：${text}`,
         }
@@ -612,12 +667,16 @@ export class PublishService {
   /** 检查 URL 是否跳转到成功页。 */
   private async checkUrlRedirect(page: Page, platform: PlatformDef): Promise<PublishReceipt | undefined> {
     const currentUrl = page.url()
-    // 如果 URL 包含成功相关路径特征
-    if (currentUrl.includes('manage') || currentUrl.includes('success') || currentUrl.includes('complete')) {
+    const urlLooksSuccessful = currentUrl.includes('success') || currentUrl.includes('complete')
+    const bodyText = await page.evaluate(() => document.body.innerText.slice(0, 4000)).catch(() => '')
+    const pageShowsAcceptedState = ['发布成功', '已发布', '审核中', '作品已提交'].some((text) => bodyText.includes(text))
+    // 仅跳到 manage 不足以证明发布成功；必须同时有成功路径或平台接受状态文案。
+    if (urlLooksSuccessful || pageShowsAcceptedState) {
       return {
         proofLevel: 'B',
+        verificationMethod: 'url-redirect',
         evidence: ['url-redirect'],
-        url: currentUrl,
+        url: sanitizeUrl(currentUrl),
         rawResponse: `URL 跳转到：${currentUrl}`,
       }
     }
@@ -625,33 +684,41 @@ export class PublishService {
   }
 
   /** 检查收集到的网络响应。 */
-  private async checkCollectedResponses(collector: PublishResponseCollector, platform: PlatformDef): Promise<PublishReceipt | undefined> {
+  private async checkCollectedResponses(collector: PublishResponseCollector, _platform: PlatformDef): Promise<PublishReceipt | undefined> {
     const responses = await collector.getResponses()
+    let weakReceipt: PublishReceipt | undefined
     for (const resp of responses) {
       if (resp.status >= 200 && resp.status < 300) {
         try {
-          const json = JSON.parse(resp.body) as Record<string, unknown>
+          const json = JSON.parse(resp.body) as unknown
           // 抖音返回 status_code / err_no；通用检查 code / status
-          const success =
-            json.status_code === 0 ||
-            json.err_no === 0 ||
-            json.code === 0 ||
-            json.status === 'success'
+          const record = json !== null && typeof json === 'object' && !Array.isArray(json)
+            ? json as Record<string, unknown>
+            : {}
+          const success = [record.status_code, record.err_no, record.code].some((value) => value === 0 || value === '0')
+            || record.status === 'success'
           if (success) {
-            return {
-              proofLevel: 'A',
+            const platformPublicationId = findPublicationId(json)
+            const publicationUrl = findPublicationUrl(json)
+            const receipt: PublishReceipt = {
+              proofLevel: platformPublicationId !== undefined || publicationUrl !== undefined ? 'A' : 'C',
+              verificationMethod: 'network-response',
               evidence: ['network-response'],
               submittedAt: new Date().toISOString(),
-              url: resp.url,
-              rawResponse: resp.body.slice(0, 2000),
+              ...(platformPublicationId !== undefined ? { platformPublicationId } : {}),
+              ...(publicationUrl !== undefined ? { url: sanitizeUrl(publicationUrl) } : {}),
+              responseUrl: sanitizeUrl(resp.url),
+              rawResponse: redactSensitiveText(resp.body.slice(0, 2000)),
             }
+            if (receipt.proofLevel === 'A') return receipt
+            weakReceipt ??= receipt
           }
         } catch {
           // 非 JSON 响应，跳过
         }
       }
     }
-    return undefined
+    return weakReceipt
   }
 
   /** 在内容管理页验证作品。 */
@@ -663,11 +730,9 @@ export class PublishService {
     if (titleKey === '') return undefined
 
     try {
-      // 修复 __name 冲突
-      await this.fixNameConflict(page)
-
       // 在新页面打开内容管理页
       const managePage = await this.browser.openPage(task.platform, platform.manageUrl)
+      await this.fixNameConflict(managePage)
       await managePage.waitForLoadState('domcontentloaded', { timeout: 45_000 }).catch(() => {})
       await managePage.waitForTimeout(5000)
 
@@ -676,7 +741,7 @@ export class PublishService {
       try {
         const cdp = await managePage.context().newCDPSession(managePage)
         const result = await cdp.send('Runtime.evaluate', {
-          expression: `document.body.innerText.includes('${titleKey.replace(/'/g, "\\'")}')`,
+          expression: `document.body.innerText.includes(${JSON.stringify(titleKey)})`,
           returnByValue: true,
         })
         found = result.result.value === true
@@ -692,6 +757,7 @@ export class PublishService {
       if (found) {
         return {
           proofLevel: 'A',
+          verificationMethod: 'content-list',
           evidence: ['content-list-match'],
           submittedAt: new Date().toISOString(),
           rawResponse: `在内容管理列表找到标题：${titleKey}`,
@@ -719,7 +785,7 @@ class PublishResponseCollector {
   onResponse(response: PwResponse): void {
     try {
       const url = response.url()
-      if (url.includes('/api/') || url.includes('/publish') || url.includes('/upload') || url.includes('/create')) {
+      if (isLikelySubmissionResponseUrl(url)) {
         // 保存 Promise 引用，getResponses() 时 await 全部
         const bodyPromise = response.text().catch(() => '')
         this.pending.set(response, bodyPromise)
@@ -745,13 +811,121 @@ class PublishResponseCollector {
 // ─── 工具函数 ────────────────────────────────────────────────────────────────
 
 /** 校验输入的基础完整性。 */
-export function validatePublishInput(input: PublishInput): string | null {
-  if (input.title === undefined || input.title.trim() === '') return 'title 必填'
-  if (input.videoPath === undefined && (input.imagePaths === undefined || input.imagePaths.length === 0)) {
+export function validatePublishInput(
+  input: PublishInput,
+  options: { checkFiles?: boolean } = {},
+): string | null {
+  if (input === undefined || input.title === undefined || input.title.trim() === '') return 'title 必填'
+
+  const hasVideo = input.videoPath !== undefined && input.videoPath.trim() !== ''
+  const imagePaths = input.imagePaths ?? []
+  const hasImages = imagePaths.length > 0
+  if (hasVideo && hasImages) return 'videoPath 和 imagePaths 只能二选一'
+  if (!hasVideo && !hasImages) {
     return 'videoPath 或 imagePaths 至少提供一个'
   }
-  if (input.videoPath !== undefined && !existsSync(input.videoPath)) return `视频文件不存在：${input.videoPath}`
+
+  const checkFiles = options.checkFiles !== false
+  if (hasVideo) {
+    if (!isAbsoluteFilePath(input.videoPath!)) return `视频路径必须是绝对路径：${input.videoPath}`
+    if (checkFiles && !existsSync(input.videoPath!)) return `视频文件不存在：${input.videoPath}`
+  }
+  for (const imagePath of imagePaths) {
+    if (imagePath.trim() === '') return '图片路径不能为空'
+    if (!isAbsoluteFilePath(imagePath)) return `图片路径必须是绝对路径：${imagePath}`
+    if (checkFiles && !existsSync(imagePath)) return `图片文件不存在：${imagePath}`
+  }
+  if (input.coverPath !== undefined) {
+    if (!isAbsoluteFilePath(input.coverPath)) return `封面路径必须是绝对路径：${input.coverPath}`
+    if (checkFiles && !existsSync(input.coverPath)) return `封面文件不存在：${input.coverPath}`
+  }
+  if (input.tags?.some((tag) => tag.trim() === '')) return '标签不能为空字符串'
   return null
+}
+
+/** C 级 Toast/弱网络信号不能单独把任务标成 published。 */
+export function isSufficientProof(receipt: PublishReceipt): boolean {
+  return receipt.proofLevel === 'A' || receipt.proofLevel === 'B'
+}
+
+function isAbsoluteFilePath(value: string): boolean {
+  // 测试夹具和跨平台任务可能使用 POSIX 路径；Windows 绝对路径另行兼容盘符形式。
+  return isAbsolute(value) || /^[/\\]/.test(value) || /^[A-Za-z]:[\\/]/.test(value)
+}
+
+function isLikelySubmissionResponseUrl(value: string): boolean {
+  const lower = value.toLowerCase()
+  return lower.includes('/publish')
+    || lower.includes('/upload')
+    || lower.includes('/create')
+    || lower.includes('aweme/create')
+    || lower.includes('note/create')
+}
+
+const PUBLICATION_ID_KEYS = new Set([
+  'aweme_id', 'awemeId', 'item_id', 'itemId', 'publication_id', 'publicationId',
+  'video_id', 'videoId', 'note_id', 'noteId', 'article_id', 'articleId',
+])
+
+const PUBLICATION_URL_KEYS = new Set(['share_url', 'shareUrl', 'publication_url', 'publicationUrl'])
+
+function findPublicationId(value: unknown, depth = 0): string | undefined {
+  if (depth > 5 || value === null || typeof value !== 'object') return undefined
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findPublicationId(item, depth + 1)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  const record = value as Record<string, unknown>
+  for (const [key, candidate] of Object.entries(record)) {
+    if (PUBLICATION_ID_KEYS.has(key) && (typeof candidate === 'string' || typeof candidate === 'number')) {
+      return String(candidate)
+    }
+  }
+  for (const candidate of Object.values(record)) {
+    const found = findPublicationId(candidate, depth + 1)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+function findPublicationUrl(value: unknown, depth = 0): string | undefined {
+  if (depth > 5 || value === null || typeof value !== 'object') return undefined
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findPublicationUrl(item, depth + 1)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  const record = value as Record<string, unknown>
+  for (const [key, candidate] of Object.entries(record)) {
+    if (PUBLICATION_URL_KEYS.has(key) && typeof candidate === 'string' && /^https?:\/\//.test(candidate)) {
+      return candidate
+    }
+  }
+  for (const candidate of Object.values(record)) {
+    const found = findPublicationUrl(candidate, depth + 1)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+function sanitizeUrl(value: string): string {
+  try {
+    const url = new URL(value)
+    return `${url.origin}${url.pathname}`
+  } catch {
+    return value.split('?')[0] ?? value
+  }
+}
+
+function redactSensitiveText(value: string): string {
+  return value
+    .replace(/("?(?:authorization|cookie|token|access_token|refresh_token|phone|mobile|password)"?\s*:\s*")([^"\\]*)/gi, '$1[REDACTED]')
+    .replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, '$1[REDACTED]')
 }
 
 /** 快照当前编辑器页面的可见输入控件与按钮。 */

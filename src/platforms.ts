@@ -143,7 +143,8 @@ export const PLATFORMS: readonly PlatformDef[] = [
   {
     id: 'xiaohongshu',
     name: '小红书',
-    capabilities: ['login', 'imageText'],
+    // 选择器框架存在，但尚未通过真实账号/草稿验收，不对 Agent 宣称可发布。
+    capabilities: ['login'],
     loginUrl: 'https://creator.xiaohongshu.com/login',
     homeUrl: 'https://creator.xiaohongshu.com/new/home',
     publishUrl: 'https://creator.xiaohongshu.com/publish/publish',

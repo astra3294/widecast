@@ -59,11 +59,12 @@ type PanelTab = 'accounts' | 'queue' | 'drafts' | 'stats' | 'settings'
 
 type TaskStatus =
   | 'draft'
+  | 'scheduled'
   | 'queued'
   | 'uploading'
-  | 'publishing'
+  | 'submitting'
   | 'verifying'
-  | 'done'
+  | 'published'
   | 'needs_attention'
   | 'retryable_failed'
   | 'terminal_failed'
@@ -72,7 +73,9 @@ type TaskStatus =
 interface PublishReceiptView {
   platformPublicationId?: string
   url?: string
+  responseUrl?: string
   proofLevel?: string
+  verificationMethod?: string
   evidence?: string[]
 }
 
@@ -219,10 +222,10 @@ class WidecastController {
     }
   }
 
-  async retryTask(taskId: string): Promise<void> {
+  async retryTask(taskId: string, confirmedNoPublication = false): Promise<void> {
     this.patch({ busy: true, error: undefined })
     try {
-      await this.call('publish.retry', { taskId })
+      await this.call('publish.retry', { taskId, confirmedNoPublication })
       await this.loadTasks()
       this.patch({ busy: false })
     } catch (error) {
@@ -385,7 +388,7 @@ function PlaceholderTab({ tab, t }: { tab: PanelTab; t: Translator }): ReactNode
 
 function taskDot(status: TaskStatus): StateDotState {
   switch (status) {
-    case 'done': return 'done'
+    case 'published': return 'done'
     case 'terminal_failed': return 'error'
     case 'needs_attention':
     case 'retryable_failed': return 'warning'
@@ -396,11 +399,12 @@ function taskDot(status: TaskStatus): StateDotState {
 function taskLabel(status: TaskStatus, t: Translator): string {
   switch (status) {
     case 'draft': return t('task.draft')
+    case 'scheduled': return t('task.scheduled')
     case 'queued': return t('task.queued')
     case 'uploading': return t('task.uploading')
-    case 'publishing': return t('task.publishing')
+    case 'submitting': return t('task.submitting')
     case 'verifying': return t('task.verifying')
-    case 'done': return t('task.done')
+    case 'published': return t('task.published')
     case 'needs_attention': return t('task.needs_attention')
     case 'retryable_failed': return t('task.retryable_failed')
     case 'terminal_failed': return t('task.terminal_failed')
@@ -422,6 +426,7 @@ function QueueTab({ snapshot, controller, t }: { snapshot: WidecastSnapshot; con
               {taskLabel(task.status, t)}
               {task.message !== undefined && task.message !== '' ? ` · ${task.message}` : ''}
               {task.receipt?.url !== undefined ? ` · ${task.receipt.url}` : ''}
+              {task.receipt?.verificationMethod !== undefined ? ` · ${task.receipt.verificationMethod}` : ''}
               {task.receipt?.proofLevel !== undefined ? ` [${task.receipt.proofLevel}]` : ''}
               {' · '}{new Date(task.createdAt).toLocaleTimeString()}
               {(task.retryCount ?? 0) > 0 ? ` · 重试${task.retryCount}次` : ''}
@@ -429,11 +434,15 @@ function QueueTab({ snapshot, controller, t }: { snapshot: WidecastSnapshot; con
           </div>
           <div className="widecastActions">
             {(task.status === 'retryable_failed' || task.status === 'needs_attention') ? (
-              <Button variant="ghost" size="sm" disabled={snapshot.busy} onClick={() => { void controller.retryTask(task.id) }}>
+              <Button variant="ghost" size="sm" disabled={snapshot.busy} onClick={() => {
+                const requiresConfirm = task.status === 'needs_attention'
+                if (requiresConfirm && !window.confirm('请确认平台内容列表中没有该作品，再重试发布。')) return
+                void controller.retryTask(task.id, requiresConfirm)
+              }}>
                 {t('task.retry')}
               </Button>
             ) : null}
-            {task.status === 'queued' ? (
+            {(task.status === 'draft' || task.status === 'scheduled' || task.status === 'queued') ? (
               <Button variant="ghost" size="sm" disabled={snapshot.busy} onClick={() => { void controller.cancelTask(task.id) }}>
                 {t('task.cancel')}
               </Button>
@@ -476,8 +485,8 @@ const en: Record<string, string> = {
   'account.ok': 'Online', 'account.expired': 'Expired', 'account.unknown': 'Unknown',
   'placeholder': 'The ', 'placeholder.dev': 'tab is under development.',
   'task.empty': 'No publish tasks yet. Use the widecast_publish tool or ask the agent to publish.',
-  'task.draft': 'Draft', 'task.queued': 'Queued', 'task.uploading': 'Uploading', 'task.publishing': 'Publishing',
-  'task.verifying': 'Verifying', 'task.done': 'Done', 'task.needs_attention': 'Needs Attention',
+  'task.draft': 'Draft', 'task.scheduled': 'Scheduled', 'task.queued': 'Queued', 'task.uploading': 'Uploading', 'task.submitting': 'Submitting',
+  'task.verifying': 'Verifying', 'task.published': 'Published', 'task.needs_attention': 'Needs Attention',
   'task.retryable_failed': 'Retryable Failed', 'task.terminal_failed': 'Failed', 'task.cancelled': 'Cancelled',
   'task.retry': 'Retry', 'task.cancel': 'Cancel',
   'version.label': 'Version',
@@ -492,8 +501,8 @@ const zh: Record<string, string> = {
   'account.ok': '在线', 'account.expired': '已失效', 'account.unknown': '未知',
   'placeholder': '', 'placeholder.dev': 'tab 开发中。',
   'task.empty': '还没有发布任务。对 agent 说"帮我把这个视频发到抖音"即可。',
-  'task.draft': '草稿', 'task.queued': '排队中', 'task.uploading': '上传中', 'task.publishing': '发布中',
-  'task.verifying': '验证中', 'task.done': '完成', 'task.needs_attention': '需要关注',
+  'task.draft': '草稿', 'task.scheduled': '已排期', 'task.queued': '排队中', 'task.uploading': '上传中', 'task.submitting': '提交中',
+  'task.verifying': '验证中', 'task.published': '已发布', 'task.needs_attention': '需要关注',
   'task.retryable_failed': '可重试失败', 'task.terminal_failed': '失败', 'task.cancelled': '已取消',
   'task.retry': '重试', 'task.cancel': '取消',
   'version.label': '版本',
